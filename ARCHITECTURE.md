@@ -1,0 +1,311 @@
+# Personal Financial OS — Architecture
+
+**Status:** Phase 1 (architecture finalized). Phase 2 (implementation) not yet started.
+
+## 0. Scope
+
+Personal Financial OS is a self-hosted, automated personal finance engine: it ingests bank data via Plaid and provides analytics/dashboards. It is a solo project — one user, not a product being built for multiple tenants — so architectural choices favor simplicity and low operational overhead over scalability.
+
+**In scope for this phase:** data ingestion (Plaid sync, categorization, transfer reconciliation) and analytics/dashboards.
+
+**Explicitly out of scope for this phase:** budgeting math (burn-rate, allowance logic).
+
+---
+
+## 1. Executive Summary
+
+The core architectural bet is to treat this system as an **event-sourced ledger with a derived read model**, not a simple CRUD app over a `transactions` table. Plaid's `/transactions/sync` endpoint is itself a change-stream (added/modified/removed), so the ingestion layer is built around that abstraction from day one rather than bolted on later.
+
+Five decisions anchor the ingestion/data side; the tech stack (section 7) anchors everything else:
+
+1. **BullMQ + Redis as the sync orchestrator**, with one queue for provider webhooks/polling and a separate queue for categorization, so a slow LLM call never blocks transaction ingestion.
+2. **A 4-tier categorization pipeline implemented as a single BullMQ flow (parent/child jobs)**, where each tier is a discrete job type that can be retried, monitored, and cost-audited independently.
+3. **Raw payloads stored immutably, cleaned/normalized documents stored separately**, linked by a stable `providerTransactionId`. This gives replay-ability if categorization logic or schema changes later.
+4. **MongoDB schemas denormalized for time-series read performance**, with compound indexes built around the actual dashboard queries (net worth over time, monthly cash flow, category breakdown) rather than a generic index-everything approach.
+5. **Docker Compose as the deployment unit from the start**, with secrets, encryption keys, and Plaid credentials treated as first-class infrastructure concerns, not app config.
+
+---
+
+## 2. Data Ingestion Architecture
+
+### 2.1 Provider Abstraction Layer
+
+Plaid is the only provider for Phase 1, but the ingestion and categorization pipeline never call the Plaid SDK directly — they call a `FinancialProvider` interface, with `providers/plaid/PlaidProvider.ts` as the sole implementation for now:
+
+```
+interface FinancialProvider {
+  createConnection(publicToken): Promise<ConnectionResult>
+  syncTransactions(connection, cursor): Promise<{ added, modified, removed, nextCursor, hasMore }>
+  getAccounts(connection): Promise<NormalizedAccount[]>
+  verifyWebhook(req): boolean
+}
+```
+
+The "Plaid Item" concept is renamed to the provider-neutral **`Connection`** everywhere in the app layer (jobs, routes, UI) — Plaid-specific naming (`itemId`, `plaid_error`) stays inside the adapter only. Intentionally lightweight for a solo project: no dynamic plugin loading, no attempt to support multiple providers simultaneously — just enough indirection that a second provider (a different aggregator, or a manual CSV-import "provider") means writing a new adapter, not touching the sync or categorization pipeline. See ADR-0004.
+
+### 2.2 Plaid `/transactions/sync` + BullMQ/Redis
+
+Plaid's sync endpoint is cursor-based: send a `cursor` (empty on first call), get back `added`, `modified`, `removed` arrays plus `has_more` and a `next_cursor`. The worker's job is to drain that cursor to completion on every trigger, not just fetch once.
+
+Queue structure:
+
+- **`provider-sync` queue** — one job per `connectionId` (a `Connection` roughly maps to one linked bank login; today that's always a Plaid Item under the hood). Triggered by (a) provider webhooks (Plaid's `SYNC_UPDATES_AVAILABLE`), and (b) a scheduled BullMQ repeatable job as a fallback safety net (e.g., every 4–6 hours) in case a webhook is missed.
+- **Job body** contains only `{ connectionId }` — the job handler loads the current cursor from the `Connections` collection at execution time, not at enqueue time, and resolves the right `FinancialProvider` adapter from the connection's `provider` field. This avoids stale-cursor bugs if multiple sync jobs for the same connection get queued back to back.
+- **Idempotency lock**: use a Redis lock (or BullMQ's built-in job-id deduplication, e.g. `jobId: `sync:${connectionId}`` with `removeOnComplete`) so a webhook retry and a scheduled poll for the same connection can't run concurrently and race on the cursor.
+- **Pagination loop inside the job**: while `has_more` is true, keep calling sync with the returned `next_cursor`, persisting the cursor to the DB after each page (not just at the end) so a crash mid-pagination resumes cleanly rather than reprocessing from scratch.
+- **Rate limits**: Plaid enforces per-Item and per-client rate limits. Use BullMQ's `limiter` option on the queue (e.g., max N jobs per second) rather than ad hoc `setTimeout` throttling, and treat `429`s as retryable with exponential backoff (BullMQ's built-in `attempts` + `backoff` job options).
+- **On completion**, the sync job enqueues categorization jobs (one per new/modified transaction, or batched) into a separate queue — keeping ingestion throughput decoupled from categorization latency.
+
+### 2.3 The 4-Tier Categorization Pipeline
+
+Model this as a **BullMQ Flow**: a parent "categorize transaction" job with a chain of child job types, where each tier either resolves the category (short-circuiting later tiers) or falls through.
+
+- **Tier 1 — Exact Match (static).** A synchronous lookup against a `MerchantRules` collection keyed on Plaid's cleaned merchant name / `personal_finance_category` or a normalized merchant string. Runs **inline in the sync job itself**, not as a separate queued job — it's a cheap DB read and doesn't need queue overhead. Maybe 60–80% of recurring transactions (subscriptions, known payroll, known utilities) resolve here instantly.
+- **Tier 2 — Regex/Fuzzy (user-defined).** User-authored rules (e.g., "if description matches `/UBER \*TRIP/i` → Transportation"). Also inline/synchronous — regex evaluation against a small rule list is fast. Store rules with a `priority` field so overlapping rules order deterministically. This is also where fuzzy matching (Levenshtein/trigram) applies against previously-categorized merchants manually corrected before, effectively "learning" from Tier 4 corrections.
+- **Tier 3 — LLM Inference (async, queued).** Only transactions that fall through Tiers 1–2 get queued into a `categorize-llm` queue. Batch these (e.g., 20–50 transactions per OpenAI call) using structured JSON output (function calling / JSON schema mode) to minimize per-call overhead and cost. This queue has its own concurrency limit and rate limiter independent of the provider-sync queue, since OpenAI has its own rate limits and cost profile. Cache LLM decisions back into the Tier 1 exact-match table keyed on the normalized merchant string — this is the mechanism by which Tier 3 usage should shrink over time as the exact-match table absorbs prior LLM decisions.
+- **Tier 4 — Human-in-the-loop.** Anything the LLM returns with low confidence (require a `confidence` field in the structured output) or explicitly flags as `uncertain`, plus anything manually recategorized, lands in a `needs_review` status on the transaction. This is a dashboard queue, not a background job — it's UI-driven. A manual correction here writes back into the Tier 1/Tier 2 rule tables, closing the loop so the same merchant never needs LLM inference again.
+
+The efficiency argument for separating these into distinct tiers isn't just cost (LLM calls are the expensive path) — it's also that Tiers 1–2 are deterministic and auditable, which matters for a financial system where "why was this categorized as X" needs a concrete answer.
+
+### 2.4 Transfer Matching (Cross-Account Reconciliation)
+
+Plaid does not link the two sides of a transfer between your own accounts — there's no `transaction_id` relationship connecting, say, a "Transfer to Savings" debit in checking with the corresponding credit in savings, or a credit-card payment leaving checking with the payment landing on the card. All Plaid gives you is a signal, via `personal_finance_category` (`TRANSFER_IN` / `TRANSFER_OUT`, or detailed values like `TRANSFER_OUT_ACCOUNT_TRANSFER`, `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`) — it flags "this is probably a transfer," not who its counterpart is.
+
+A **transfer-matching pass** runs as a queued job after categorization completes for a sync batch:
+
+- Scope the search to the user's own accounts (never cross-user).
+- Candidate pairs: opposite-signed transactions with equal (or near-equal, to allow for a fee) magnitude, where at least one side has a `TRANSFER_*` or payment-type category, and dates fall within a small tolerance window (a few days — ACH transfers commonly settle 1–3 days apart across accounts).
+- On a match, link both sides via a shared `transferGroupId` and set `excludeFromCashFlow: true` on both — this is the critical part, since an unflagged internal transfer otherwise counts as both income and an expense and inflates every cash-flow chart in section 4.
+- Unmatched `TRANSFER_*`-categorized transactions age into the Tier 4 review queue after a short window (e.g., 3 days with no match found), rather than sitting silently unresolved — confirm it's an external transfer (leave as-is) or manually pair it.
+- This pass emits the same "affected date range" signal used by the sync job (see section 4.4) so any rollup that already included the now-reclassified transactions gets recomputed.
+
+See ADR-0006.
+
+---
+
+## 3. Data Modeling & Performance
+
+### 3.1 Raw vs. Cleaned Data
+
+Store two collections per data type: `RawPlaidTransactions` (or a generic `RawPayloads` collection with a `source`/`type` discriminator) holding the untouched Plaid response, and `Transactions` holding the normalized, app-facing document. Link them via `providerTransactionId` (Plaid's `transaction_id`), not by MongoDB `_id`.
+
+Reasons this matters more here than in a typical CRUD app:
+
+- **Auditability** — if a categorization is disputed or a balance looks wrong, show exactly what the bank sent.
+- **Replay-ability** — if categorization logic, normalization rules, or schema change later, reprocess `RawPlaidTransactions` into a new `Transactions` collection without re-hitting Plaid's API (which has both rate limits and a cost per Item).
+- **Plaid data corrections** — Plaid itself sometimes retroactively modifies a `pending` transaction into a `posted` one with a different `transaction_id` (pending→posted linkage via `pending_transaction_id`). Keeping the raw record lets you reconcile this cleanly rather than ending up with duplicate cleaned transactions.
+
+Raw payloads are a simple insert-only collection (no updates), which keeps write patterns cheap. Cleaned `Transactions` documents are the ones indexes and queries are built around.
+
+### 3.2 Schema Design for Time-Series Aggregation
+
+```
+Connection {          // was "Item" — provider-neutral connection record
+  _id
+  userId
+  provider          // 'plaid' (only value today; future-proofs for a 2nd provider)
+  providerItemId     // Plaid's item_id, opaque to the rest of the app
+  institutionName
+  status             // 'active' | 'login_required' | 'error'
+  cursor             // provider sync cursor, lives here not on a separate table
+  lastSyncedAt
+}
+
+Account {
+  _id
+  userId
+  connectionId        // ref -> Connection
+  provider
+  providerAccountId    // Plaid's account_id
+  institutionName
+  type          // depository, credit, loan, investment
+  subtype
+  officialName
+  currentBalance
+  availableBalance
+  isoCurrencyCode
+}
+
+Transaction {
+  _id
+  userId
+  accountId          // ref -> Account
+  providerTransactionId   // Plaid transaction_id, unique index
+  pendingTransactionId    // for pending->posted reconciliation
+  date                // posted date, stored as UTC Date, NOT string
+  authorizedDate
+  amount              // stored as integer cents, never float
+  isoCurrencyCode
+  merchantName        // Plaid's cleaned name
+  merchantNameNormalized  // normalized/lowercased key for Tier 1 lookups
+  description          // raw description, for fuzzy/regex matching
+  category: {
+    tier: 1 | 2 | 3 | 4,
+    value: String,       // e.g. "Groceries"
+    confidence: Number,  // for LLM tier
+    status: 'confirmed' | 'needs_review'
+  }
+  transferGroupId      // set by the transfer-matching pass (section 2.4); links both sides
+  excludeFromCashFlow  // true once matched as an internal transfer; filtered out of income/expense rollups
+  pending: Boolean
+  isRemoved: Boolean     // soft-delete flag for Plaid "removed" events
+  createdAt, updatedAt
+}
+```
+
+Key modeling decisions: amounts as **integer cents**, not floats or Decimal128 unless sub-cent precision is specifically needed (it isn't, for a personal finance tool) — avoids floating point drift in aggregation pipelines. Dates as native `Date` objects in UTC, with timezone conversion happening at the presentation layer, so `$dateTrunc`/`$group` by month work correctly in aggregation without string parsing.
+
+**Indexes** to support the dashboard's actual query patterns:
+
+- `{ userId: 1, date: -1 }` — the workhorse index; almost every dashboard query filters by user and sorts/ranges by date.
+- `{ userId: 1, 'category.value': 1, date: -1 }` — for categorical spending distribution and category drill-downs.
+- `{ providerTransactionId: 1 }` unique — for upsert-on-sync idempotency (this is what makes Plaid's added/modified/removed events safe to apply as upserts).
+- `{ accountId: 1, date: -1 }` — for per-account views and net worth reconciliation.
+- `{ userId: 1, 'category.status': 1 }` — for the Tier 4 review queue.
+- `{ transferGroupId: 1 }` sparse — for looking up both sides of a matched transfer.
+
+For net worth and monthly cash flow, don't recompute from raw transactions on every dashboard load — use MongoDB's `$merge`/scheduled aggregation into a pre-computed `DailyBalanceSnapshot` or `MonthlyRollup` collection (populated by a nightly or post-sync job), and have the dashboard read from that. Write-time aggregation for anything read on every page load; on-demand aggregation only for ad hoc/drill-down queries.
+
+### 3.3 Persistence Layer / Database Abstraction
+
+Mongo was chosen specifically for its aggregation pipeline (`$dateTrunc`, `$merge`, compound indexes) and denormalized document shape — that choice doesn't disappear behind an abstraction, and a genuinely backend-agnostic query layer is over-engineering for a one-user system. What's worth doing: put every persistence operation behind a **repository per aggregate** (`ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository`), with domain-shaped method names — `upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup(userId, range)` — rather than exposing the native driver or generic CRUD to routes and job handlers. This keeps intent readable regardless of backing store, and means a future relational migration is contained to rewriting repository internals and rollup jobs rather than a rewrite scattered through the whole app — it won't make such a migration painless (aggregation-pipeline logic and document shape are still Mongo-specific), but it bounds the blast radius. See ADR-0005.
+
+---
+
+## 4. Analytics & Visualization Strategy
+
+### 4.1 Frontend Structure (Vite + React SPA + TS + Shadcn)
+
+Organize the "Financial Control Center" around **query-scoped panels**, not a monolithic dashboard component, inside the `apps/web` Vite SPA (see section 7 for the full repo layout):
+
+```
+/apps/web/src
+  /routes                (React Router route components — one per dashboard page)
+    net-worth.tsx
+    cash-flow.tsx
+    spending-categories.tsx
+    subscriptions.tsx
+    review-queue.tsx
+  /features
+    /net-worth        (NetWorthChart, useNetWorthQuery)
+    /cash-flow         (CashFlowChart, useCashFlowQuery)
+    /spending-categories (CategoryDonut, useCategoryBreakdown)
+    /subscriptions      (SubscriptionTable, useRecurringQuery)
+    /review-queue       (Tier4ReviewList)
+  /components/ui        (shadcn primitives)
+  /lib/api              (typed fetch client, one function per dashboard endpoint, hitting apps/api)
+  /lib/events            (SSE client, section 4.3)
+```
+
+Each feature owns its own data hook (React Query / TanStack Query — caching, background refetch on sync completion, and loading/error states for free, which matters when the backing data updates asynchronously via BullMQ jobs the frontend didn't trigger). Use Shadcn's `Card`, `Tabs`, and `DataTable` primitives as the layout scaffolding rather than custom-building dashboard chrome. Since it's a private single-user dashboard behind auth, there's no need for SSR/SSG — a plain client-rendered SPA is simpler and there's nothing to gain from server rendering here.
+
+### 4.2 Serving Data to Recharts/Chart.js
+
+The general principle: **the API returns chart-ready data, not raw transactions for the frontend to reduce.** Push aggregation into MongoDB's pipeline, not into the browser.
+
+- **Net Worth (aggregated):** endpoint reads from the pre-computed `DailyBalanceSnapshot` collection, returns `[{ date, netWorth, assets, liabilities }]`. Never touches the raw `Transactions` collection at request time. For an account with limited backfill history (see 30-day backfill in section 6), the series starts at that account's first snapshot date rather than implying a $0 balance before it existed — the frontend renders a visible gap/dashed segment for the period before an account was linked, not a flat line.
+- **Monthly Cash Flow (income vs. expense):** an aggregation pipeline grouping `Transactions` by `$dateTrunc` month and `amount > 0 / < 0` (or a dedicated `direction` field), filtering out `excludeFromCashFlow: true` (transfers matched by the section 2.4 pass), returning `[{ month, income, expenses }]`. If hit often, back it with the same rollup-on-write pattern as net worth.
+- **Categorical Spending Distribution:** `$group` by `category.value` within a date range, `$sum` amount, returned pre-sorted for the donut/bar chart. Cheap enough to compute on-demand given the compound category index above.
+- **Recurring Subscription Tracking:** requires detecting *recurrence*, not just aggregating. Phase 1 heuristic: group by `merchantNameNormalized`, flag as recurring any merchant with ≥3 transactions where the amount is within a small tolerance band and the interval between dates clusters around ~30 or ~365 days (simple standard-deviation-on-interval check). Runs as a nightly batch job writing to a `Subscriptions` collection rather than a live query. Plaid also offers a native Recurring Transactions endpoint; worth evaluating as a swap-in for the DIY heuristic once Phase 1 is stable.
+- **Comparison views (MoM/YoY, custom ranges):** dashboard endpoints accept a `range` and an optional `compareRange`, computed in a single `$facet` aggregation rather than two round trips, returning `{ current: [...], compare: [...] }`.
+
+### 4.3 Live Dashboard Updates
+
+The backing data changes asynchronously — a sync or categorization job can finish seconds or minutes after the page loaded. Use **Server-Sent Events**, not WebSockets: the traffic is one-directional (server → client, "something changed, go refetch"), so SSE avoids the reconnect/bidirectional complexity a WebSocket would add for no benefit here. A BullMQ `QueueEvents` listener inside `apps/api` publishes lightweight events (e.g., `{ type: 'sync.completed', connectionId }`, `{ type: 'transfer.matched' }`) to a `/events` SSE route (Fastify supports streaming responses natively); the frontend's SSE client calls `queryClient.invalidateQueries()` for the relevant feature on receipt. Keep React Query's background refetch interval on as a fallback in case the SSE connection drops. See ADR-0007.
+
+### 4.4 Rollup Recompute Strategy
+
+`DailyBalanceSnapshot`/`MonthlyRollup` are write-time aggregates, which means they can go stale: a Plaid `removed` event, a late-arriving `modified` transaction, or the transfer-matching pass reclassifying a transaction as `excludeFromCashFlow` can all invalidate a rollup already computed. Rather than incremental delta math (fragile, especially for removals) or a full recompute on every change (wasteful), each job that mutates transactions — the sync job and the transfer-matching job alike — tracks which date buckets it touched during that run and enqueues a **targeted recompute** for just those buckets, using `$merge` to overwrite the affected documents. This bounds recompute cost to what actually changed and gives both triggers (provider sync, transfer matching) a single shared recompute path. See ADR-0008.
+
+---
+
+## 5. Privacy & Self-Hosting
+
+Since this holds real bank data, the following are non-negotiable from the start rather than "harden later":
+
+- **Docker Compose topology**: separate containers for the web app (static Vite build, served as static files — no Node runtime needed for it), the API (Fastify), the BullMQ worker(s), MongoDB, Redis, and a reverse proxy (Caddy/Traefik) handling TLS termination and routing to the web/API containers. Workers and API are separately scalable/restartable — a stuck LLM categorization job should never require restarting the API.
+- **Secrets management**: Plaid `client_id`/`secret`, OpenAI API key, and Mongo credentials come from an `.env` file excluded from git, or better, Docker secrets / a mounted secrets file, never baked into the image.
+- **Field-level encryption for sensitive fields**: consider encrypting account/routing numbers and raw payloads at rest (MongoDB Client-Side Field Level Encryption, or application-level AES-GCM before write) even though this is self-hosted — a stolen disk image shouldn't leak bank credentials in plaintext.
+- **Network posture**: bind Mongo and Redis to the Docker internal network only, never exposed to the host's public interface. Only the reverse proxy has an external port.
+- **Backups**: since this is the system of record for financial history, a scheduled `mongodump` to encrypted, off-box storage is not optional — losing the raw Plaid history means losing the ability to ever reconcile discrepancies.
+- **Plaid webhook verification**: verify webhook JWT signatures (Plaid signs webhooks) rather than trusting the payload, since the webhook endpoint is internet-reachable.
+
+---
+
+## 6. Bottlenecks & Edge Cases (Living Register)
+
+This section stays a living register with resolution status per item, updated as issues are actually handled — not a write-once doc.
+
+- **Duplicate transactions from pending→posted transitions.** Plaid sends a `pending` transaction, then later a new `posted` transaction with `pending_transaction_id` referencing the original. Handling this incorrectly is the single most common source of double-counted spending in Plaid integrations — the sync handler must treat the pending record as superseded (soft-delete or link, never leave both as active) rather than inserting both as live transactions.
+- **Plaid rate limits and Item error states.** Items can enter `ITEM_LOGIN_REQUIRED` (re-auth via Plaid Link update mode needed) — the sync worker detects this error code, marks the account as needing re-auth, and stops retrying that Item until the user acts, rather than burning retry budget indefinitely.
+- **Cursor drift / `PLAID_ERROR` on stale cursors.** If a cursor becomes invalid (e.g., after a long outage or Item re-link), Plaid returns an error requiring a full resync from an empty cursor — the worker needs an explicit "reset and full resync" path, not just retry-with-backoff.
+- **LLM non-determinism and cost creep.** Without the Tier 1 write-back loop, LLM usage doesn't shrink over time, and categorization can be non-deterministic across runs for the same merchant. Structured JSON output plus low temperature helps, but the real fix is aggressive caching of LLM decisions into Tier 1.
+- **Multi-currency accounts — descoped for MVP (ADR-0001).** Single currency only for this iteration; no FX conversion logic, and no per-account currency validation at link time. `baseCurrency` is a fixed env var, `isoCurrencyCode` stays on the `Transaction`/`Account` schema for forward compatibility, but it's treated as a constant, not something the aggregation pipeline needs to reason about yet. Revisit (including whether to validate/exclude mismatched accounts) if a foreign-currency account is ever actually linked.
+- **Timezone boundaries on "monthly" aggregation — mostly resolved by consistent UTC, with one wrinkle.** Storing and aggregating everything in UTC eliminates the original concern (different parts of the pipeline disagreeing on what "month" a transaction falls in). The remaining gotcha is display: Plaid's `date` field is a calendar date with no time-of-day component — it represents "the day the bank says this posted," not a moment in time. If that date string gets parsed into a JS `Date` and rendered through the browser's local timezone, a UTC-midnight timestamp can flip back to the previous day for anyone west of UTC. So: aggregate in UTC (solved), but treat the field as a literal date string on display, not something to round-trip through timezone conversion.
+- **Backfill volume on initial Item link — capped at 1 month for MVP (ADR-0002).** Rather than pulling Plaid's full available history (up to 24 months), request only ~30 days via `days_requested` at Link initialization. Keeps the first sync fast and day-one LLM categorization cost low. Full historical backfill can be added later as an explicit, user-triggered action.
+- **Soft-delete propagation — resolved via targeted rollup recompute (section 4.4, ADR-0008).** Plaid's `removed` array means a transaction should disappear from the app — the sync job includes the affected date bucket(s) in its recompute signal, so any rollup collection that already included the removed transaction gets recomputed for just that bucket, not just the source record deleted.
+- **Cross-account transfers aren't linked by Plaid — resolved via the transfer-matching pass (section 2.4, ADR-0006).** Without it, a transfer between your own accounts (e.g., checking → savings, or a credit-card payment) shows up as both an expense and income, inflating cash-flow charts. The matching pass links both sides via `transferGroupId`, marks them `excludeFromCashFlow`, and ages unmatched `TRANSFER_*`-categorized transactions into Tier 4 review after a few days rather than leaving them silently unresolved.
+
+---
+
+## 7. Tech Stack & Repository Structure
+
+### 7.1 Monorepo: pnpm workspaces + Turborepo
+
+One repo, not one package. pnpm workspaces handle dependency linking between apps and packages; Turborepo handles cached, parallelized task running (`turbo run lint test build`) across them. Chosen over Nx specifically because Nx's generator/plugin model is more machinery than a solo project needs — pnpm+Turborepo gets the caching and workspace-linking benefits with a fraction of the config surface. See ADR-0010.
+
+```
+/apps
+  /web        — Vite + React SPA: dashboard UI only, no server-side rendering, talks to apps/api over HTTP + SSE
+  /api        — Fastify: all HTTP-facing routes (dashboard endpoints, Plaid webhook receiver, SSE stream)
+  /worker     — plain Node/TS process: BullMQ queues (provider-sync, categorize-llm, transfer-matching, rollups)
+/packages
+  /db         — Mongoose schemas + the repository layer (section 3.3): ConnectionRepository, AccountRepository, TransactionRepository, RollupRepository
+  /providers  — FinancialProvider interface (section 2.1) + PlaidProvider adapter
+  /shared     — shared TS types/constants used by all three apps (Transaction, Account, Connection shapes, category enums)
+  /config     — shared tsconfig.base.json, eslint config, prettier config
+```
+
+### 7.2 Vite SPA for the frontend, Fastify for the API, plain Node for the worker
+
+Three apps, three distinct jobs, all plain TypeScript with no shared "do everything" framework. `apps/web` is a Vite-built React SPA — client-rendered only, since there's no SEO or anonymous-traffic benefit to gain from SSR on a private, single-user, authenticated dashboard. `apps/api` is a Fastify server owning every HTTP-facing route: the per-widget dashboard endpoints from section 4.2, the Plaid webhook receiver, and the SSE stream from section 4.3. `apps/worker` is a framework-free Node/TS process running the BullMQ queues, independent of any request lifecycle (queue workers need to run continuously regardless of framework, which is why section 5 calls for the API and the worker(s) to be separately restartable/scalable Docker containers). All three import the same `db` and `providers` packages, so schema, repository, and provider-adapter logic is written once and shared.
+
+Fastify was chosen over Hono for the API layer specifically because this is a long-running self-hosted Node process, not an edge/serverless deployment — Fastify has the more mature plugin ecosystem and first-class TypeScript + JSON-schema/Zod validation support for that deployment model. See ADR-0011, ADR-0014.
+
+### 7.3 TypeScript
+
+`strict: true` plus `noUncheckedIndexedAccess`, defined once in `packages/config/tsconfig.base.json` and extended by every app/package — one place to tighten rules later, and no workspace silently opting out of strictness.
+
+### 7.4 Linting & formatting: ESLint + Prettier, enforced from day one
+
+`typescript-eslint` as the base, plus `eslint-plugin-react` + `eslint-plugin-react-hooks` for `apps/web` (React-specific correctness rules — hooks-of-hooks, dependency arrays), and a plain Node/TS ruleset for `apps/api` and `apps/worker`. Prettier handles formatting, wired to a shared config in `packages/config`. Husky + lint-staged run lint and format on every commit; a GitHub Actions workflow runs lint + typecheck + test on every push, even solo — cheap insurance against the class of mistakes that otherwise surface at 11pm. See ADR-0012.
+
+### 7.5 TDD: Vitest, with the seam drawn at "pure logic vs. queue glue"
+
+Vitest as the test runner across every package (fast, native ESM/TS, works identically across `apps/web`, `apps/api`, and `apps/worker`) over Jest. The parts of this system worth testing hard aren't "does BullMQ retry correctly" — that's the library's job — they're the pure business logic: Tier 1/2 categorization resolution, the transfer-matching candidate logic, the subscription-recurrence heuristic, the rollup bucket-tracking logic. The practical consequence: job handlers stay thin (queue glue only) and hand off to plain, framework-free functions that do the actual work — that's what makes TDD practical here. Two testing layers:
+
+- **Unit tests (Vitest)** — the pure logic above, plus React component tests (Testing Library) for the handful of components with real conditional logic (e.g., the net-worth chart's gap-rendering for partial history).
+- **Integration tests (Vitest + `mongodb-memory-server`)** — the repository layer and the aggregation pipelines specifically (`$dateTrunc`, `$merge`, `$facet`). These have real Mongo semantics a mock won't catch, so they get actual database-backed tests rather than unit tests with a stubbed driver.
+
+See ADR-0013.
+
+---
+
+## 8. Decision Log (ADR-numbered)
+
+This section is the project's ADR record — no separate `docs/decisions/` files. Each entry captures what was decided, what alternatives were considered, and why, so "future you" doesn't have to reconstruct the reasoning later.
+
+- **ADR-0001 — Single-currency MVP.** No FX conversion, no per-account currency validation at link time. `baseCurrency` is a fixed env var. Full detail in section 6.
+- **ADR-0002 — 30-day backfill cap on initial account link.** Full detail in section 6.
+- **ADR-0003 — Serverful, not serverless.** Evaluated moving ingestion/categorization to a serverless stack (Lambda/SQS, Vercel + Upstash, etc.). Decision: stay serverful (BullMQ + Redis + Docker Compose). Rationale: single-user personal tool, not a product being sold — the operational simplicity of a self-hosted, always-running stack outweighs any cost/scaling benefit serverless would offer, and serverless would hand more of the "self-hosted/private" story to third-party managed services (Atlas, Upstash, cloud functions), cutting against the privacy goal.
+- **ADR-0004 — Provider abstraction adopted from day one.** All Plaid access goes through a `FinancialProvider` interface (section 2.1); the app layer works in terms of a provider-neutral `Connection`, not a Plaid Item. Rationale: renaming/abstracting later means touching schema fields and every query that references them — doing it before any code exists is nearly free.
+- **ADR-0005 — DB abstraction scoped to a repository layer, not a backend-agnostic query layer.** Mongo's aggregation pipeline and denormalized schema are core to the design and won't be hidden behind an abstraction; a repository-per-aggregate layer (section 3.3) isolates persistence calls and bounds the blast radius of a hypothetical future relational migration without pretending to make it painless.
+- **ADR-0006 — Transfer matching built in Phase 1, not deferred.** A post-categorization matching pass (section 2.4) links both sides of a cross-account transfer and excludes them from cash-flow aggregation. Rationale: directly affects the correctness of Phase 1 analytics — an unmatched transfer silently inflates income/expense charts.
+- **ADR-0007 — Live dashboard updates via SSE, not WebSockets.** One-directional data flow (server → client "something finished, refetch"), so SSE for lower complexity, backed by a BullMQ `QueueEvents` listener.
+- **ADR-0008 — Rollup staleness resolved via targeted, bucket-scoped recompute.** Rather than incremental delta updates or full recomputes, any job that mutates transactions tracks which date buckets it touched and triggers a `$merge`-based recompute scoped to just those buckets. Also resolves the "soft-delete propagation" edge case.
+- **ADR-0009 — Currency validation at link time was proposed, then explicitly rejected.** Considered checking each linked account's `isoCurrencyCode` against a base currency and soft-excluding mismatches from aggregates. Decision: not now — stay with ADR-0001. Revisit only if a foreign-currency account is actually linked.
+- **ADR-0010 — Monorepo: pnpm workspaces + Turborepo.** Chosen over Nx for lower config overhead on a solo project.
+- **ADR-0011 — Vite SPA (`apps/web`) + Fastify API (`apps/api`), not unified Next.js.** Next.js's core strengths (SSR/RSC, SEO, caching for anonymous traffic) don't apply to a private single-user dashboard, so keeping it would mean carrying real framework complexity for unused features.
+- **ADR-0012 — ESLint + Prettier, not Biome.** Chosen for ecosystem maturity, particularly React-specific correctness rules for `apps/web`.
+- **ADR-0013 — Vitest for TDD, not Jest.** Fast, native ESM/TS, consistent across all three apps.
+- **ADR-0014 — Fastify over Hono for `apps/api`.** Long-running self-hosted Node process, not an edge/serverless deployment — Fastify's plugin ecosystem and validation tooling fit that model better.
