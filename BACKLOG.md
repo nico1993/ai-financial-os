@@ -20,7 +20,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 ## Epic: SETUP — Repo & Tooling Foundation
 
-- [ ] **SETUP-1** — Scaffold pnpm + Turborepo monorepo: `apps/{web,api,worker}`, `packages/{db,providers,shared,config}` (section 7.1).
+- [x] **SETUP-1** — Scaffold pnpm + Turborepo monorepo: `apps/{web,api,worker}`, `packages/{db,providers,shared,config}` (section 7.1).
 - [ ] **SETUP-2** — Shared `tsconfig.base.json` in `packages/config` — `strict: true`, `noUncheckedIndexedAccess` — extended by every workspace (section 7.3).
 - [ ] **SETUP-3** — Shared ESLint + Prettier config in `packages/config`: `typescript-eslint` base, `eslint-plugin-react`/`eslint-plugin-react-hooks` for `apps/web`, plain Node/TS ruleset for `apps/api` and `apps/worker` (section 7.4).
 - [ ] **SETUP-4** — Husky + lint-staged: lint and format on every commit.

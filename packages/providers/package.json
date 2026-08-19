@@ -1,0 +1,13 @@
+{
+  "name": "@financial-os/providers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo \"@financial-os/providers: no build configured yet\"",
+    "dev": "echo \"@financial-os/providers: no dev server configured yet\"",
+    "lint": "echo \"@financial-os/providers: no lint configured yet\"",
+    "typecheck": "echo \"@financial-os/providers: no typecheck configured yet\"",
+    "test": "echo \"@financial-os/providers: no tests configured yet\""
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@financial-os/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo \"@financial-os/shared: no build configured yet\"",
+    "dev": "echo \"@financial-os/shared: no dev server configured yet\"",
+    "lint": "echo \"@financial-os/shared: no lint configured yet\"",
+    "typecheck": "echo \"@financial-os/shared: no typecheck configured yet\"",
+    "test": "echo \"@financial-os/shared: no tests configured yet\""
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@financial-os/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared tsconfig.base.json, ESLint config, and Prettier config — added by SETUP-2/SETUP-3/SETUP-4.",
+  "files": [
+    "tsconfig.base.json"
+  ]
+}
