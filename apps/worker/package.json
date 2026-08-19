@@ -7,7 +7,11 @@
     "build": "echo \"@financial-os/worker: no build configured yet\"",
     "dev": "echo \"@financial-os/worker: no dev server configured yet\"",
     "lint": "echo \"@financial-os/worker: no lint configured yet\"",
-    "typecheck": "echo \"@financial-os/worker: no typecheck configured yet\"",
+    "typecheck": "tsc --noEmit",
     "test": "echo \"@financial-os/worker: no tests configured yet\""
+  },
+  "devDependencies": {
+    "@financial-os/config": "workspace:*",
+    "typescript": "^5.7.2"
   }
 }
