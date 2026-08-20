@@ -4,16 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo \"@financial-os/api: no build configured yet\"",
-    "dev": "echo \"@financial-os/api: no dev server configured yet\"",
+    "build": "echo \"@financial-os/api: no build step -- runs from source via tsx (ADR-0019)\"",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/session": "^11.0.2",
+    "@financial-os/db": "workspace:*",
+    "@financial-os/providers": "workspace:*",
+    "bcryptjs": "^2.4.3",
+    "fastify": "^5.2.0",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.1"
+  },
   "devDependencies": {
     "@financial-os/config": "workspace:*",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.10.5",
     "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

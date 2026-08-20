@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
   "scripts": {
     "build": "echo \"@financial-os/providers: no build configured yet\"",
     "dev": "echo \"@financial-os/providers: no dev server configured yet\"",

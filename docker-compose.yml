@@ -50,8 +50,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      # Stub until apps/api has a real /health route — see apps/api/Dockerfile.
-      test: ["CMD-SHELL", "exit 0"]
+      # wget, not curl -- node:22-alpine ships busybox wget, not curl.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -10,11 +10,12 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 1. **SETUP** — nothing else can start without the monorepo, tooling, and a Docker Compose skeleton in place.
 2. **DATA** — schemas and the repository layer come before anything that needs to persist or query data.
-3. **ING** — ingestion needs DATA's schemas to write into.
-4. **CAT** — categorization needs ING's transactions to categorize.
-5. **XFER** — transfer matching needs CAT's category signals (`TRANSFER_*`) to find candidates.
-6. **ANLY** — dashboards need ING + CAT + XFER's data to be meaningful (cash flow needs `excludeFromCashFlow` from XFER, categories from CAT, transactions from ING).
-7. **SEC** — baseline network/secrets posture belongs in SETUP; the items listed under SEC here are the ones worth deferring slightly (encryption at rest, backups) since they don't block functional development, but shouldn't slip past Phase 1 sign-off.
+3. **AUTH** — `apps/api` needs a real "current user" per request before any route (starting with ING-3's Link routes) can be written correctly (ADR-0018).
+4. **ING** — ingestion needs DATA's schemas to write into, and AUTH's `requireAuth` to know whose data it's writing.
+5. **CAT** — categorization needs ING's transactions to categorize.
+6. **XFER** — transfer matching needs CAT's category signals (`TRANSFER_*`) to find candidates.
+7. **ANLY** — dashboards need ING + CAT + XFER's data to be meaningful (cash flow needs `excludeFromCashFlow` from XFER, categories from CAT, transactions from ING).
+8. **SEC** — baseline network/secrets posture belongs in SETUP; the items listed under SEC here are the ones worth deferring slightly (encryption at rest, backups) since they don't block functional development, but shouldn't slip past Phase 1 sign-off.
 
 ---
 
@@ -44,11 +45,19 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **DATA-9** — Repository layer: `ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository` with domain-shaped methods (`upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup()`) — no raw driver calls outside repositories (section 3.3, ADR-0005).
 - [x] **DATA-10** — Integration tests for repositories and aggregation pipelines using `mongodb-memory-server`, written alongside each repository method.
 
+## Epic: AUTH — Session-Based Authentication (ADR-0018)
+
+- [x] **AUTH-1** — `User` schema (`packages/db`): `email` (unique), `passwordHash` (`select: false`); `UserRepository` with `create`/`findByEmail`/`findByEmailWithPassword`/`findById`/`count`.
+- [x] **AUTH-2** — Redis-backed session plugin in `apps/api` (`@fastify/cookie` + `@fastify/session`, hand-written `RedisSessionStore` on top of `ioredis` rather than `connect-redis` — avoids betting on that package's exact version/typings for a ~30-line get/set/destroy store) — `httpOnly` cookie, `secure` in production.
+- [x] **AUTH-3** — Auth routes: `POST /api/auth/register` (allowed only when zero users exist yet, or the caller is already authenticated), `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`.
+- [x] **AUTH-4** — `requireAuth` preHandler hook applied to every route except `/api/auth/*`, the Plaid webhook receiver (ING-7, verified via JWT instead), and `/health`.
+- [ ] **AUTH-5** — `apps/web` login page + redirect-if-unauthenticated. Deferred until `apps/web` work starts (ANLY epic) — not needed to unblock the backend.
+
 ## Epic: ING — Data Ingestion & Provider Abstraction
 
 - [x] **ING-1** — `FinancialProvider` interface in `packages/providers` (section 2.1, ADR-0004).
 - [x] **ING-2** — `PlaidProvider` adapter implementing `FinancialProvider`.
-- [ ] **ING-3** — Plaid Link flow: public token exchange, `Connection` creation, initial `Account` fetch, 30-day backfill via `days_requested` (ADR-0002).
+- [x] **ING-3** — Plaid Link flow: public token exchange, `Connection` creation, initial `Account` fetch, 30-day backfill via `days_requested` (ADR-0002).
 - [ ] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
 - [ ] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup).
 - [ ] **ING-6** — Rate limiting + retry/backoff config on the `provider-sync` queue (429 handling).

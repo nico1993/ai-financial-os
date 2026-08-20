@@ -1,3 +1,4 @@
+export * from "./User.js";
 export * from "./Connection.js";
 export * from "./Account.js";
 export * from "./Transaction.js";

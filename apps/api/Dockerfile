@@ -1,8 +1,3 @@
-# Scaffolding only (SETUP-7) — apps/api has no real Fastify server yet,
-# just the SETUP-1 placeholder (src/index.ts). This wires a working pnpm
-# workspace install inside the image now, so later stories (ING-*, ANLY-*)
-# add real app code without retrofitting the container.
-#
 # Manifests are copied and installed before the rest of the source so
 # `pnpm install` is cached across builds unless a package.json actually
 # changed — the point of the workspace-wide monorepo layer below.
@@ -25,7 +20,5 @@ FROM deps AS runtime
 COPY . .
 WORKDIR /repo/apps/api
 EXPOSE 3000
-# TODO: swap for a real start command (e.g. `pnpm build && node dist/index.js`)
-# once apps/api has an actual Fastify server — this just runs the SETUP-1
-# placeholder "dev" script today.
-CMD ["pnpm", "dev"]
+# No build/dist step -- runs straight from TS source via tsx (ADR-0019).
+CMD ["pnpm", "start"]
