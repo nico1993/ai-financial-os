@@ -1,0 +1,107 @@
+// FinancialProvider — the interface every ingestion/categorization code
+// calls, never a provider SDK directly (ARCHITECTURE.md §2.1, ADR-0004).
+// Plaid is the only implementation for Phase 1 (plaid/PlaidProvider.ts),
+// but nothing outside that adapter should import the `plaid` package or
+// know a Plaid-specific field name exists.
+
+export type NormalizedAccountType = "depository" | "credit" | "loan" | "investment";
+
+export interface NormalizedAccount {
+  providerAccountId: string;
+  institutionName: string;
+  type: NormalizedAccountType;
+  subtype: string;
+  officialName?: string;
+  /** Integer cents, never float. */
+  currentBalance: number;
+  availableBalance?: number;
+  isoCurrencyCode: string;
+}
+
+export interface NormalizedTransaction {
+  providerTransactionId: string;
+  /** For pending→posted reconciliation (ARCHITECTURE.md §6). */
+  pendingTransactionId?: string;
+  /** Resolves to a NormalizedAccount.providerAccountId — the sync job maps
+   * this to an internal accountId via AccountRepository before writing. */
+  accountProviderId: string;
+  date: Date;
+  authorizedDate?: Date;
+  /** Integer cents, never float. */
+  amount: number;
+  isoCurrencyCode: string;
+  merchantName?: string;
+  description: string;
+  pending: boolean;
+  /** The provider's own category signal (e.g. Plaid's
+   * personal_finance_category.detailed), passed through unparsed so the
+   * transfer-matching pass (§2.4) can read TRANSFER_-prefixed/payment-type
+   * values without this layer knowing Plaid's taxonomy. */
+  providerCategory?: string;
+}
+
+export interface RemovedTransaction {
+  providerTransactionId: string;
+}
+
+export interface ConnectionResult {
+  providerItemId: string;
+  accessToken: string;
+  institutionName: string;
+  accounts: NormalizedAccount[];
+}
+
+/** Enough for an adapter to resolve back to its provider-specific item —
+ * e.g. Plaid's access_token — without the app layer knowing the provider's
+ * credential shape. Sourced from Connection.providerItemId/accessToken
+ * (packages/db), fetched via ConnectionRepository.findByIdWithAccessToken(). */
+export interface ProviderConnectionRef {
+  providerItemId: string;
+  accessToken: string;
+}
+
+export interface SyncTransactionsResult {
+  added: NormalizedTransaction[];
+  modified: NormalizedTransaction[];
+  removed: RemovedTransaction[];
+  nextCursor: string;
+  hasMore: boolean;
+}
+
+/** Framework-agnostic shape a webhook route hands to verifyWebhook() — not
+ * tied to Fastify's request type, since packages/providers shouldn't
+ * depend on apps/api. The route (ING-7) is responsible for extracting
+ * these from the real request. */
+export interface WebhookVerificationRequest {
+  rawBody: string;
+  headers: Record<string, string | undefined>;
+}
+
+export interface CreateLinkTokenInput {
+  /** Plaid's user.client_user_id — opaque, just needs to be stable per user. */
+  userId: string;
+}
+
+export interface FinancialProvider {
+  /** Initializes a Link session for the frontend (ADR-0017 — not in the
+   * original §2.1 sketch, but AGENTS.md requires every Plaid call to go
+   * through this interface, and Link can't start without one). Bakes in
+   * the 30-day backfill cap (ADR-0002) — callers don't control it. */
+  createLinkToken(input: CreateLinkTokenInput): Promise<{ linkToken: string }>;
+  /** Exchanges a Link `public_token` for a durable connection: creates the
+   * access token, resolves the institution name, and fetches the initial
+   * account list. */
+  createConnection(publicToken: string): Promise<ConnectionResult>;
+  /** One page of the provider's sync cursor. The pagination loop (calling
+   * this repeatedly while hasMore is true, persisting nextCursor after
+   * each page) lives in the sync job (ING-4), not here (§2.2). */
+  syncTransactions(
+    connection: ProviderConnectionRef,
+    cursor: string | null,
+  ): Promise<SyncTransactionsResult>;
+  getAccounts(connection: ProviderConnectionRef): Promise<NormalizedAccount[]>;
+  /** Verifies a webhook actually came from the provider before its payload
+   * is trusted (ARCHITECTURE.md §5 — the webhook endpoint is
+   * internet-reachable). */
+  verifyWebhook(req: WebhookVerificationRequest): Promise<boolean>;
+}

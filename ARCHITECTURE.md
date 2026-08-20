@@ -34,12 +34,15 @@ Plaid is the only provider for Phase 1, but the ingestion and categorization pip
 
 ```
 interface FinancialProvider {
+  createLinkToken(input): Promise<{ linkToken }>
   createConnection(publicToken): Promise<ConnectionResult>
   syncTransactions(connection, cursor): Promise<{ added, modified, removed, nextCursor, hasMore }>
   getAccounts(connection): Promise<NormalizedAccount[]>
-  verifyWebhook(req): boolean
+  verifyWebhook(req): Promise<boolean>
 }
 ```
+
+`createLinkToken` isn't in the original sketch above — Plaid Link can't initialize client-side without a server-issued `link_token`, and the same "never call the Plaid SDK directly outside the adapter" rule that motivates this interface means that call has to live here too. It bakes in the 30-day backfill cap (ADR-0002, via `days_requested`) so callers don't have to know that constant exists. `verifyWebhook` is `Promise<boolean>`, not the synchronous `boolean` this section originally sketched — real JWK-based signature verification requires an async key fetch. See ADR-0017.
 
 The "Plaid Item" concept is renamed to the provider-neutral **`Connection`** everywhere in the app layer (jobs, routes, UI) — Plaid-specific naming (`itemId`, `plaid_error`) stays inside the adapter only. Intentionally lightweight for a solo project: no dynamic plugin loading, no attempt to support multiple providers simultaneously — just enough indirection that a second provider (a different aggregator, or a manual CSV-import "provider") means writing a new adapter, not touching the sync or categorization pipeline. See ADR-0004.
 
@@ -310,3 +313,5 @@ This section is the project's ADR record — no separate `docs/decisions/` files
 - **ADR-0013 — Vitest for TDD, not Jest.** Fast, native ESM/TS, consistent across all three apps.
 - **ADR-0014 — Fastify over Hono for `apps/api`.** Long-running self-hosted Node process, not an edge/serverless deployment — Fastify's plugin ecosystem and validation tooling fit that model better.
 - **ADR-0015 — Caddy over Traefik for the reverse proxy.** Section 5 left this as an either/or; SETUP-9 needed a concrete choice. Decision: Caddy — automatic HTTPS via Let's Encrypt with effectively zero config, and a Caddyfile that's dramatically simpler than Traefik's label-based or file-provider routing config, with no extra moving pieces (no separate cert-manager/ACME container) to operate. Traefik's core strength — dynamic service discovery as containers come and go — matters more for a multi-service platform with frequent deploys than for a solo, fixed-topology self-hosted stack. See `proxy/Caddyfile`.
+- **ADR-0016 — `Connection.accessToken` added to the §3.2 schema.** The original Connection sketch (section 3.2) didn't include a field for Plaid's `access_token`, but `FinancialProvider.syncTransactions()` (section 2.1) can't call Plaid without one — it has to live somewhere, and `Connection` is the only per-Item record. Decision: store it as `accessToken` on `Connection`, `select: false` on the Mongoose schema so it's excluded from every query by default; `ConnectionRepository.findByIdWithAccessToken()` is the sole read path, used only by the provider-sync job. This is a bearer credential, not account data, but sensitive for the same reason section 5 calls out account/routing numbers — it should be in scope for SEC-1's field-level encryption before this ever holds a real token, not just app-level `select: false`.
+- **ADR-0017 — `FinancialProvider.createLinkToken()` added to the §2.1 interface.** The original interface sketch (section 2.1) started at `createConnection`, implicitly assuming a `public_token` already exists — but AGENTS.md requires every Plaid call, including Link initialization, to go through this interface, and Plaid Link needs a server-issued `link_token` before the frontend can even open. Decision: add `createLinkToken(input: { userId }): Promise<{ linkToken }>` to the interface, implemented by `PlaidProvider` via `linkTokenCreate` with `transactions.days_requested` fixed at 30 (ADR-0002) so the cap can't be bypassed by a caller. Also formalizes `verifyWebhook` as `Promise<boolean>` rather than the sketch's synchronous `boolean`, since JWK-based webhook signature verification (section 5) requires an async key fetch.

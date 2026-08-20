@@ -46,8 +46,8 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 ## Epic: ING — Data Ingestion & Provider Abstraction
 
-- [ ] **ING-1** — `FinancialProvider` interface in `packages/providers` (section 2.1, ADR-0004).
-- [ ] **ING-2** — `PlaidProvider` adapter implementing `FinancialProvider`.
+- [x] **ING-1** — `FinancialProvider` interface in `packages/providers` (section 2.1, ADR-0004).
+- [x] **ING-2** — `PlaidProvider` adapter implementing `FinancialProvider`.
 - [ ] **ING-3** — Plaid Link flow: public token exchange, `Connection` creation, initial `Account` fetch, 30-day backfill via `days_requested` (ADR-0002).
 - [ ] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
 - [ ] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup).

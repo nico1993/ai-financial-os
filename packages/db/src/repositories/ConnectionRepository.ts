@@ -9,13 +9,16 @@ import {
 
 export type UpsertConnectionInput = Pick<
   ConnectionDocument,
-  "userId" | "provider" | "providerItemId" | "institutionName"
+  "userId" | "provider" | "providerItemId" | "institutionName" | "accessToken"
 > &
   Partial<Pick<ConnectionDocument, "status" | "cursor" | "lastSyncedAt">>;
 
 export class ConnectionRepository {
   /** Upserts by (userId, provider, providerItemId) — safe to call on every
-   * Link flow / sync run without creating duplicates. */
+   * Link flow / sync run without creating duplicates. The returned
+   * document never carries `accessToken` (it's `select: false` on the
+   * schema) — callers already have the plaintext value they just passed
+   * in; fetch it back only via findByIdWithAccessToken(). */
   async upsertFromSync(input: UpsertConnectionInput): Promise<ConnectionDocument> {
     const doc = await ConnectionModel.findOneAndUpdate(
       { userId: input.userId, provider: input.provider, providerItemId: input.providerItemId },
@@ -27,6 +30,15 @@ export class ConnectionRepository {
 
   async findById(connectionId: string): Promise<ConnectionDocument | null> {
     return ConnectionModel.findById(connectionId).lean<ConnectionDocument | null>();
+  }
+
+  /** The one place `accessToken` is ever read back out — for the
+   * provider-sync job (ING-4) to authenticate its Plaid calls. Every other
+   * read path should use findById()/findByUserId() and never see it. */
+  async findByIdWithAccessToken(connectionId: string): Promise<ConnectionDocument | null> {
+    return ConnectionModel.findById(connectionId)
+      .select("+accessToken")
+      .lean<ConnectionDocument | null>();
   }
 
   async findByUserId(userId: string): Promise<ConnectionDocument[]> {

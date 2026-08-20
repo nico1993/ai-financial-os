@@ -11,6 +11,12 @@ export interface ConnectionDocument {
   provider: "plaid";
   /** Plaid's item_id — opaque to the rest of the app. */
   providerItemId: string;
+  /** Plaid's access_token for this Item — required to call
+   * /transactions/sync and every other per-Item Plaid endpoint. Added by
+   * ADR-0016 (not in the original §3.2 sketch): a bearer credential, not
+   * account data, but sensitive for the same reason — a candidate for
+   * SEC-1's field-level encryption before this ever holds real tokens. */
+  accessToken: string;
   institutionName: string;
   status: ConnectionStatus;
   /** Provider sync cursor. Lives here, not on a separate table (ARCHITECTURE.md §3.2). */
@@ -25,6 +31,7 @@ const connectionSchema = new Schema<ConnectionDocument>(
     userId: { type: String, required: true },
     provider: { type: String, required: true, enum: ["plaid"], default: "plaid" },
     providerItemId: { type: String, required: true },
+    accessToken: { type: String, required: true, select: false },
     institutionName: { type: String, required: true },
     status: {
       type: String,
