@@ -1,0 +1,31 @@
+# Reverse proxy — TLS termination + routing to web/api (ARCHITECTURE.md §5,
+# §7.1; see ADR-0015 for Caddy over Traefik). This is the only container
+# with a host-published port; mongo/redis stay on the internal Docker
+# network only (confirmed in docker-compose.yml — no `ports:` on either).
+#
+# {$DOMAIN} comes from .env via docker-compose. Set a real domain for
+# automatic Let's Encrypt TLS in production; "localhost" (the default) gets
+# a locally-trusted dev cert automatically, no config needed either way.
+
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# SSE stream (ARCHITECTURE.md §4.3) — disable response buffering so
+	# `sync.completed`/`transfer.matched` events flush to the client
+	# immediately instead of queuing.
+	#
+	# Route prefixes below are a placeholder convention, not something
+	# ARCHITECTURE.md pins down yet — apps/api's actual route structure
+	# lands with ING-7 and ANLY-3..8. Adjust these matchers once it does.
+	@api path /events /api/*
+	reverse_proxy @api api:3000 {
+		flush_interval -1
+	}
+
+	# Everything else falls through to the web app. This proxies to web's
+	# dev-server container for now (see apps/web/Dockerfile) — once ANLY-9
+	# adds a real Vite build, prefer serving the static output directly
+	# from Caddy (`root * /srv` + `file_server`) over proxying to a
+	# container running the dev server.
+	reverse_proxy web:5173
+}

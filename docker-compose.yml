@@ -1,0 +1,120 @@
+# Docker Compose topology for self-hosted deployment (ARCHITECTURE.md §5).
+#
+# No app logic runs yet — apps/{web,api,worker} are still SETUP-1
+# placeholders (see BACKLOG.md). This wires the six-container shape now
+# (web, api, worker, mongo, redis, reverse proxy) with the network posture
+# and healthchecks ARCHITECTURE.md §5 treats as non-negotiable from day one,
+# so later stories add real app logic on top of a topology that's already
+# correct instead of retrofitting Docker around finished apps.
+name: ai-financial-os
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    # No `ports:` — reachable only from other containers on the internal
+    # network, never from the host's public interface (ARCHITECTURE.md §5).
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    # Same network posture as mongo — internal only, no published ports.
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Stub until apps/api has a real /health route — see apps/api/Dockerfile.
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Stub until apps/worker has real BullMQ processors to probe.
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      # Stub until there's a real static build to serve — see apps/web/Dockerfile.
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+    networks:
+      - internal
+    # The only container with a host-published port (ARCHITECTURE.md §5).
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

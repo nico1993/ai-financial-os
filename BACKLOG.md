@@ -25,11 +25,11 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **SETUP-3** — Shared ESLint + Prettier config in `packages/config`: `typescript-eslint` base, `eslint-plugin-react`/`eslint-plugin-react-hooks` for `apps/web`, plain Node/TS ruleset for `apps/api` and `apps/worker` (section 7.4).
 - [x] **SETUP-4** — Husky + lint-staged: lint and format on every commit.
 - [x] **SETUP-5** — Vitest configured per workspace with a shared base config in `packages/config` (section 7.5).
-- [ ] **SETUP-6** — GitHub Actions CI workflow: lint + typecheck + test on every push.
-- [ ] **SETUP-7** — Docker Compose skeleton: containers for `web`, `api`, `worker`, MongoDB, Redis, reverse proxy — no app logic yet, just scaffolding and healthchecks (section 5).
-- [ ] **SETUP-8** — `.env.example` + secrets-loading convention documented (dotenv for dev; Docker secrets / mounted file for prod).
-- [ ] **SETUP-9** — Reverse proxy (Caddy/Traefik) config: TLS termination, routing to `web`/`api`; confirm Mongo/Redis are bound to the Docker internal network only.
-- [ ] **SETUP-10** — `README.md`: quick orientation — setup steps, repo layout, how to run locally.
+- [x] **SETUP-6** — GitHub Actions CI workflow: lint + typecheck + test on every push.
+- [x] **SETUP-7** — Docker Compose skeleton: containers for `web`, `api`, `worker`, MongoDB, Redis, reverse proxy — no app logic yet, just scaffolding and healthchecks (section 5).
+- [x] **SETUP-8** — `.env.example` + secrets-loading convention documented (dotenv for dev; Docker secrets / mounted file for prod).
+- [x] **SETUP-9** — Reverse proxy (Caddy/Traefik) config: TLS termination, routing to `web`/`api`; confirm Mongo/Redis are bound to the Docker internal network only.
+- [x] **SETUP-10** — `README.md`: quick orientation — setup steps, repo layout, how to run locally.
 
 ## Epic: DATA — Data Model & Persistence
 
