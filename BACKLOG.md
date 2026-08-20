@@ -33,16 +33,16 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 ## Epic: DATA — Data Model & Persistence
 
-- [ ] **DATA-1** — `Connection` schema (`packages/db`) (section 3.2).
-- [ ] **DATA-2** — `Account` schema.
-- [ ] **DATA-3** — `Transaction` schema, including `category`, `transferGroupId`, `excludeFromCashFlow`, `isRemoved`.
-- [ ] **DATA-4** — `RawPayloads` schema (insert-only, `source`/`type` discriminator) (section 3.1).
-- [ ] **DATA-5** — `MerchantRules` schema (Tier 1/2 rules, `priority` field).
-- [ ] **DATA-6** — `DailyBalanceSnapshot` / `MonthlyRollup` schemas.
-- [ ] **DATA-7** — `Subscriptions` schema.
-- [ ] **DATA-8** — Apply the six indexes from section 3.2 (`userId+date`, `userId+category.value+date`, `providerTransactionId` unique, `accountId+date`, `userId+category.status`, `transferGroupId` sparse).
-- [ ] **DATA-9** — Repository layer: `ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository` with domain-shaped methods (`upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup()`) — no raw driver calls outside repositories (section 3.3, ADR-0005).
-- [ ] **DATA-10** — Integration tests for repositories and aggregation pipelines using `mongodb-memory-server`, written alongside each repository method.
+- [x] **DATA-1** — `Connection` schema (`packages/db`) (section 3.2).
+- [x] **DATA-2** — `Account` schema.
+- [x] **DATA-3** — `Transaction` schema, including `category`, `transferGroupId`, `excludeFromCashFlow`, `isRemoved`.
+- [x] **DATA-4** — `RawPayloads` schema (insert-only, `source`/`type` discriminator) (section 3.1).
+- [x] **DATA-5** — `MerchantRules` schema (Tier 1/2 rules, `priority` field).
+- [x] **DATA-6** — `DailyBalanceSnapshot` / `MonthlyRollup` schemas.
+- [x] **DATA-7** — `Subscriptions` schema.
+- [x] **DATA-8** — Apply the six indexes from section 3.2 (`userId+date`, `userId+category.value+date`, `providerTransactionId` unique, `accountId+date`, `userId+category.status`, `transferGroupId` sparse).
+- [x] **DATA-9** — Repository layer: `ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository` with domain-shaped methods (`upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup()`) — no raw driver calls outside repositories (section 3.3, ADR-0005).
+- [x] **DATA-10** — Integration tests for repositories and aggregation pipelines using `mongodb-memory-server`, written alongside each repository method.
 
 ## Epic: ING — Data Ingestion & Provider Abstraction
 
