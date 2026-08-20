@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+
+# Machine-generated — never hand-format.
+pnpm-lock.yaml
+
+# Hand-authored prose that predates this tooling; reformatting would churn
+# their manual structure without adding value.
+AGENTS.md
+ARCHITECTURE.md
+DEPRECATED_Personal_Financial_OS_Session_Handoff.md
