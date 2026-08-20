@@ -11,9 +11,14 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@financial-os/config": "workspace:*",
+    "prettier": "^3.4.2",
     "turbo": "^2.3.0"
-  }
+  },
+  "prettier": "@financial-os/config/prettier.config.js"
 }

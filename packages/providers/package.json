@@ -6,12 +6,13 @@
   "scripts": {
     "build": "echo \"@financial-os/providers: no build configured yet\"",
     "dev": "echo \"@financial-os/providers: no dev server configured yet\"",
-    "lint": "echo \"@financial-os/providers: no lint configured yet\"",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "echo \"@financial-os/providers: no tests configured yet\""
   },
   "devDependencies": {
     "@financial-os/config": "workspace:*",
+    "eslint": "^9.17.0",
     "typescript": "^5.7.2"
   }
 }
