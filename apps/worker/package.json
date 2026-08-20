@@ -8,11 +8,13 @@
     "dev": "echo \"@financial-os/worker: no dev server configured yet\"",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"@financial-os/worker: no tests configured yet\""
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@financial-os/config": "workspace:*",
     "eslint": "^9.17.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
