@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { registerSession } from "./auth/session.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPlaidRoutes } from "./routes/plaid.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
@@ -15,6 +16,8 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await registerAuthRoutes(app);
   await registerPlaidRoutes(app);
+  // Unauthenticated by design — verified via signed JWT instead (ING-7).
+  await registerWebhookRoutes(app);
 
   return app;
 }

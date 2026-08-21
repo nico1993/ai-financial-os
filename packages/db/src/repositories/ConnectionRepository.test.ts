@@ -57,6 +57,21 @@ describe("ConnectionRepository", () => {
     expect(found?.accessToken).toBe("access-sandbox-abc123");
   });
 
+  it("findByProviderItemId resolves a webhook's item id back to the connection", async () => {
+    await repo.upsertFromSync(baseInput());
+
+    const found = await repo.findByProviderItemId("plaid", "item-1");
+    expect(found?.institutionName).toBe("Chase");
+    // Still no credential on this read path.
+    expect((found as { accessToken?: string } | null)?.accessToken).toBeUndefined();
+  });
+
+  it("findByProviderItemId returns null for an item we don't have", async () => {
+    await repo.upsertFromSync(baseInput());
+
+    expect(await repo.findByProviderItemId("plaid", "item-unknown")).toBeNull();
+  });
+
   it("findByUserId scopes to the given user", async () => {
     await repo.upsertFromSync(baseInput());
     await repo.upsertFromSync(

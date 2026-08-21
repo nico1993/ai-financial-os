@@ -41,6 +41,17 @@ export class ConnectionRepository {
       .lean<ConnectionDocument | null>();
   }
 
+  /** Resolves a provider's own item id back to our Connection — the only
+   * handle a webhook gives us (ING-7). Scoped by provider because
+   * `providerItemId` is only unique within one provider's namespace
+   * (ADR-0004 anticipates a second adapter). */
+  async findByProviderItemId(
+    provider: ConnectionDocument["provider"],
+    providerItemId: string,
+  ): Promise<ConnectionDocument | null> {
+    return ConnectionModel.findOne({ provider, providerItemId }).lean<ConnectionDocument | null>();
+  }
+
   async findByUserId(userId: string): Promise<ConnectionDocument[]> {
     return ConnectionModel.find({ userId }).lean<ConnectionDocument[]>();
   }

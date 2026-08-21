@@ -49,6 +49,10 @@ const connectionSchema = new Schema<ConnectionDocument>(
 // upsert key for ConnectionRepository.upsertFromSync().
 connectionSchema.index({ userId: 1, provider: 1, providerItemId: 1 }, { unique: true });
 connectionSchema.index({ userId: 1 });
+// Webhook lookups arrive with only the provider's item id (ING-7), which
+// the compound index above can't serve — its leading field is userId, and
+// an inbound webhook doesn't tell us who the user is.
+connectionSchema.index({ provider: 1, providerItemId: 1 });
 
 export const ConnectionModel: Model<ConnectionDocument> =
   mongoose.models.Connection ?? model<ConnectionDocument>("Connection", connectionSchema);
