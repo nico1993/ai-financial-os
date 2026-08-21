@@ -1,0 +1,84 @@
+// normalize.ts — pure functions the sync job hands off to (ARCHITECTURE.md
+// §7.5: job handlers stay thin, real work lives in framework-free
+// functions). No I/O, no BullMQ, no Mongoose calls — everything here is
+// directly unit-testable.
+import type { NormalizedTransaction } from "@financial-os/providers";
+import type { TransactionDocument, UpsertTransactionInput } from "@financial-os/db";
+
+/** The category the sync job stamps on a brand-new transaction, before any
+ * categorization has run. Tier 4 / needs_review is the honest description
+ * of that state — it lands in the review queue (§2.3) rather than
+ * masquerading as a confirmed category — and it is self-healing: once
+ * CAT-3 wires the Tier 1/2 resolvers into this job, and CAT-4 adds the LLM
+ * pass, these get claimed automatically.
+ *
+ * Note this is only ever applied via `$setOnInsert` in
+ * TransactionRepository.upsertFromSync(), so a later provider `modified`
+ * event can't reset a real category back to this. */
+export const UNCATEGORIZED: TransactionDocument["category"] = {
+  tier: 4,
+  value: "Uncategorized",
+  status: "needs_review",
+};
+
+/** The Tier 1 exact-match lookup key (§2.3). Deliberately blunt for now:
+ * lowercase, and collapse every run of non-alphanumerics to a single
+ * space, so "SQ *BLUE_BOTTLE  COFFEE" and "Sq Blue Bottle Coffee" resolve
+ * to the same key. CAT-1 owns any smarter normalization (stripping
+ * processor prefixes, trailing reference numbers); because the raw text is
+ * preserved on both Transaction.description and the RawPayload, this key
+ * can be recomputed for every stored transaction if that logic changes. */
+export function normalizeMerchantName(input: {
+  merchantName?: string;
+  description: string;
+}): string {
+  const source = input.merchantName?.trim() ? input.merchantName : input.description;
+  return source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Truncates to UTC midnight. Plaid's `date` is a calendar date, already
+ * parsed as UTC midnight by the adapter — this must not shift it into
+ * another day (AGENTS.md date convention). */
+export function utcDayStart(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/** Truncates to the first of the UTC month — the MonthlyRollup bucket key. */
+export function utcMonthStart(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+export interface TransactionContext {
+  userId: string;
+  accountId: TransactionDocument["accountId"];
+}
+
+/** Maps one provider-normalized transaction onto the repository's input
+ * shape. Amounts arrive as integer cents from the adapter and are passed
+ * through untouched — no float math anywhere in this path. */
+export function toTransactionInput(
+  tx: NormalizedTransaction,
+  ctx: TransactionContext,
+): UpsertTransactionInput {
+  return {
+    userId: ctx.userId,
+    accountId: ctx.accountId,
+    providerTransactionId: tx.providerTransactionId,
+    pendingTransactionId: tx.pendingTransactionId,
+    date: tx.date,
+    authorizedDate: tx.authorizedDate,
+    amount: tx.amount,
+    isoCurrencyCode: tx.isoCurrencyCode,
+    merchantName: tx.merchantName,
+    merchantNameNormalized: normalizeMerchantName(tx),
+    description: tx.description,
+    category: UNCATEGORIZED,
+    pending: tx.pending,
+    // transferGroupId / excludeFromCashFlow are deliberately absent: those
+    // belong to the transfer-matching pass (XFER-3), and setting them here
+    // would let a resync clobber a match it knows nothing about.
+  };
+}

@@ -35,18 +35,55 @@ describe("TransactionRepository", () => {
 
   it("upsertFromSync is idempotent by providerTransactionId — a resync updates, not duplicates", async () => {
     await repo.upsertFromSync(baseInput());
-    await repo.upsertFromSync(
-      baseInput({
-        category: { tier: 3, value: "Dining", confidence: 0.8, status: "needs_review" },
-      }),
-    );
+    await repo.upsertFromSync(baseInput({ amount: -4500, description: "TRADER JOE'S #123 ADJ" }));
 
     const all = await repo.findByUserAndDateRange("user-1", {
       start: new Date("2026-01-01"),
       end: new Date("2026-01-31"),
     });
     expect(all).toHaveLength(1);
-    expect(all[0]?.category.value).toBe("Dining");
+    expect(all[0]?.amount).toBe(-4500);
+    expect(all[0]?.description).toBe("TRADER JOE'S #123 ADJ");
+  });
+
+  it("upsertFromSync does NOT overwrite an existing category on a provider 'modified' event", async () => {
+    // The sync job passes a placeholder category on every upsert. Without
+    // $setOnInsert, a Plaid amount correction would silently undo Tier 1/2/3
+    // categorization — or a manual Tier 4 correction the user just made.
+    await repo.upsertFromSync(
+      baseInput({ category: { tier: 1, value: "Groceries", status: "confirmed" } }),
+    );
+    await repo.upsertFromSync(
+      baseInput({
+        amount: -4500,
+        category: { tier: 4, value: "Uncategorized", status: "needs_review" },
+      }),
+    );
+
+    const found = await repo.findByProviderTransactionId("txn-1");
+    expect(found?.amount).toBe(-4500);
+    expect(found?.category.value).toBe("Groceries");
+    expect(found?.category.status).toBe("confirmed");
+  });
+
+  it("updateCategory is the supported way to re-categorize", async () => {
+    const created = await repo.upsertFromSync(baseInput());
+    await repo.updateCategory(created._id.toString(), {
+      tier: 3,
+      value: "Dining",
+      confidence: 0.8,
+      status: "needs_review",
+    });
+
+    const found = await repo.findByProviderTransactionId("txn-1");
+    expect(found?.category.value).toBe("Dining");
+  });
+
+  it("findByProviderTransactionId returns the transaction, or null when unknown", async () => {
+    await repo.upsertFromSync(baseInput());
+
+    expect((await repo.findByProviderTransactionId("txn-1"))?.amount).toBe(-4200);
+    expect(await repo.findByProviderTransactionId("nope")).toBeNull();
   });
 
   it("findByUserAndDateRange filters by range and excludes removed by default", async () => {

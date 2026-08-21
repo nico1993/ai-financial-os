@@ -42,7 +42,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **DATA-6** — `DailyBalanceSnapshot` / `MonthlyRollup` schemas.
 - [x] **DATA-7** — `Subscriptions` schema.
 - [x] **DATA-8** — Apply the six indexes from section 3.2 (`userId+date`, `userId+category.value+date`, `providerTransactionId` unique, `accountId+date`, `userId+category.status`, `transferGroupId` sparse).
-- [x] **DATA-9** — Repository layer: `ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository` with domain-shaped methods (`upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup()`) — no raw driver calls outside repositories (section 3.3, ADR-0005).
+- [x] **DATA-9** — Repository layer: `ConnectionRepository`, `AccountRepository`, `TransactionRepository`, `RollupRepository` with domain-shaped methods (`upsertFromSync()`, `findByUserAndDateRange()`, `getMonthlyRollup()`) — no raw driver calls outside repositories (section 3.3, ADR-0005). _`RawPayloadRepository` was missing from this list even though §3.1 requires the collection to be written; added during ING-4, see ADR-0021._
 - [x] **DATA-10** — Integration tests for repositories and aggregation pipelines using `mongodb-memory-server`, written alongside each repository method.
 
 ## Epic: AUTH — Session-Based Authentication (ADR-0018)
@@ -58,7 +58,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **ING-1** — `FinancialProvider` interface in `packages/providers` (section 2.1, ADR-0004).
 - [x] **ING-2** — `PlaidProvider` adapter implementing `FinancialProvider`.
 - [x] **ING-3** — Plaid Link flow: public token exchange, `Connection` creation, initial `Account` fetch, 30-day backfill via `days_requested` (ADR-0002).
-- [ ] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
+- [x] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
 - [ ] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup).
 - [ ] **ING-6** — Rate limiting + retry/backoff config on the `provider-sync` queue (429 handling).
 - [ ] **ING-7** — Plaid webhook receiver (`apps/api`): `SYNC_UPDATES_AVAILABLE` triggers a `provider-sync` job; verify webhook JWT signatures.
@@ -66,7 +66,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [ ] **ING-9** — Pending→posted reconciliation: soft-delete/link the pending record when its posted counterpart arrives (section 6).
 - [ ] **ING-10** — Item error-state handling: detect `ITEM_LOGIN_REQUIRED`, mark `Connection.status`, stop retrying until the user re-auths (section 6).
 - [ ] **ING-11** — Cursor-drift handling: detect `PLAID_ERROR` on a stale cursor, explicit reset-and-full-resync path (section 6).
-- [ ] **ING-12** — Unit tests for the sync job's pure logic (pagination/cursor handling, pending/posted merge logic), written first.
+- [ ] **ING-12** — Unit tests for the sync job's pure logic (pagination/cursor handling, pending/posted merge logic), written first. _Pagination/cursor half landed test-first with ING-4 (`syncConnection.test.ts`, `normalize.test.ts`); the pending/posted merge half is still open and belongs with ING-9._
 
 ## Epic: CAT — Categorization Pipeline
 

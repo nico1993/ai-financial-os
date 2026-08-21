@@ -4,16 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo \"@financial-os/worker: no build configured yet\"",
-    "dev": "echo \"@financial-os/worker: no dev server configured yet\"",
+    "build": "echo \"@financial-os/worker: no build step -- runs from source via tsx (ADR-0019)\"",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "@financial-os/db": "workspace:*",
+    "@financial-os/providers": "workspace:*",
+    "@financial-os/shared": "workspace:*",
+    "bullmq": "^5.34.6",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.1"
+  },
   "devDependencies": {
     "@financial-os/config": "workspace:*",
+    "@types/node": "^22.10.5",
     "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

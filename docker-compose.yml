@@ -70,8 +70,12 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      # Stub until apps/worker has real BullMQ processors to probe.
-      test: ["CMD-SHELL", "exit 0"]
+      # A queue processor has no HTTP surface to probe, so this only
+      # confirms the process is still up -- it won't catch a worker that's
+      # alive but wedged. A real liveness signal (last-completed-job
+      # timestamp in Redis) is worth adding alongside ING-8's scheduled
+      # poll, which gives a predictable heartbeat to check against.
+      test: ["CMD-SHELL", "pgrep -f 'src/index.ts' > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

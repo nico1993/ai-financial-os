@@ -1,7 +1,6 @@
-# Scaffolding only (SETUP-7) — apps/worker has no real BullMQ processors
-# yet, just the SETUP-1 placeholder (src/index.ts). See apps/api/Dockerfile
-# for the rationale behind this layer shape; worker and api are deliberately
-# built the same way so a stuck job can be restarted without touching api.
+# See apps/api/Dockerfile for the rationale behind this layer shape;
+# worker and api are deliberately built the same way so a stuck job can be
+# restarted without touching api.
 FROM node:22-alpine AS base
 WORKDIR /repo
 RUN corepack enable
@@ -21,7 +20,5 @@ FROM deps AS runtime
 COPY . .
 WORKDIR /repo/apps/worker
 # No EXPOSE — this is a background queue processor, not an HTTP service.
-# TODO: swap for a real start command once apps/worker has actual BullMQ
-# queue processors (ING-4 onward) — this just runs the SETUP-1 placeholder
-# "dev" script today.
-CMD ["pnpm", "dev"]
+# No build/dist step -- runs straight from TS source via tsx (ADR-0019).
+CMD ["pnpm", "start"]

@@ -35,11 +35,20 @@ export interface DateRange {
 export class TransactionRepository {
   /** Upserts by providerTransactionId — the mechanism that makes Plaid's
    * added/modified/removed sync events safe to apply idempotently
-   * (ARCHITECTURE.md §3.1, §3.2). */
+   * (ARCHITECTURE.md §3.1, §3.2).
+   *
+   * `category` is applied with `$setOnInsert`, not `$set`: it is the one
+   * field on this document the *app* owns rather than the provider. A
+   * Plaid `modified` event (an amount correction, a pending→posted flip)
+   * would otherwise reset a transaction that Tier 1/2/3 had already
+   * categorized — or worse, that the user had manually corrected via the
+   * Tier 4 review queue — back to whatever placeholder the sync job passes
+   * in. Re-categorization goes through updateCategory() instead. */
   async upsertFromSync(input: UpsertTransactionInput): Promise<TransactionDocument> {
+    const { category, ...providerOwnedFields } = input;
     const doc = await TransactionModel.findOneAndUpdate(
       { providerTransactionId: input.providerTransactionId },
-      { $set: input },
+      { $set: providerOwnedFields, $setOnInsert: { category } },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     ).lean();
     return doc as TransactionDocument;
@@ -47,6 +56,16 @@ export class TransactionRepository {
 
   async findById(transactionId: string): Promise<TransactionDocument | null> {
     return TransactionModel.findById(transactionId).lean<TransactionDocument | null>();
+  }
+
+  /** Looks a transaction up by the provider's id rather than ours — the
+   * sync job needs this to read a soon-to-be-removed transaction's date
+   * before soft-deleting it, so the rollup bucket that already counted it
+   * can be recomputed (ADR-0008). */
+  async findByProviderTransactionId(
+    providerTransactionId: string,
+  ): Promise<TransactionDocument | null> {
+    return TransactionModel.findOne({ providerTransactionId }).lean<TransactionDocument | null>();
   }
 
   /** Powers most dashboard queries — filters by user, ranges by date
