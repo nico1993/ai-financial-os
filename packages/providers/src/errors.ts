@@ -7,8 +7,7 @@
 // Each adapter translates its own failures into these types; everything
 // upstream matches on them instead (ADR-0023).
 //
-// Only the cases a story actually consumes live here. ING-10
-// (ITEM_LOGIN_REQUIRED) and ING-11 (cursor drift) add their own members.
+// Only the cases a story actually consumes live here.
 
 export class ProviderError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -28,5 +27,49 @@ export class ProviderRateLimitError extends ProviderError {
     super(message, options);
     this.name = "ProviderRateLimitError";
     this.retryAfterMs = options?.retryAfterMs;
+  }
+}
+
+/** The connection needs the user to log in again before it will sync
+ * (Plaid: ITEM_LOGIN_REQUIRED). Not retryable by us at all — retrying
+ * burns rate-limit budget against an Item that cannot succeed until a
+ * human re-authenticates (§6, ING-10). Maps to
+ * `Connection.status = "login_required"`. */
+export class ProviderReauthRequiredError extends ProviderError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderReauthRequiredError";
+  }
+}
+
+/** The connection is gone for good — access revoked, or the provider no
+ * longer recognizes the item. Re-auth won't fix it; the user has to link
+ * again. Maps to `Connection.status = "error"` (ING-10). */
+export class ProviderConnectionRevokedError extends ProviderError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderConnectionRevokedError";
+  }
+}
+
+/** The stored cursor is no longer usable — e.g. after a long outage or an
+ * Item re-link. Recovery is a full resync from an empty cursor, not a
+ * retry (§6, ING-11). */
+export class ProviderCursorInvalidError extends ProviderError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderCursorInvalidError";
+  }
+}
+
+/** The underlying data changed while we were paginating, so the pages
+ * fetched so far no longer form a consistent view (Plaid:
+ * TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION). Recovery is to restart
+ * the drain from the cursor this run began with — NOT a full resync, and
+ * NOT a plain retry of the failed page (§6, ING-11). */
+export class ProviderSyncMutationError extends ProviderError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderSyncMutationError";
   }
 }

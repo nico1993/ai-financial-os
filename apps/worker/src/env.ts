@@ -25,6 +25,14 @@ const envSchema = z.object({
    * burst of webhooks doesn't walk straight into a Plaid 429 (§2.2). */
   PROVIDER_SYNC_RATE_MAX: z.coerce.number().int().positive().default(5),
   PROVIDER_SYNC_RATE_DURATION_MS: z.coerce.number().int().positive().default(1_000),
+  /** How often the fallback poll sweeps every syncable connection (ING-8).
+   * §2.2 suggests 4–6h: frequent enough that a missed webhook doesn't
+   * leave data stale for a day, rare enough not to look like polling. */
+  PROVIDER_SYNC_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(4 * 60 * 60 * 1_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

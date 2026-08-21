@@ -2,10 +2,12 @@
 // BullMQ, Fastify, and Mongoose (ARCHITECTURE.md §7.5). Everything it
 // touches arrives through `deps`, so the pagination/cursor behaviour §2.2
 // specifies is unit-testable against plain fakes.
-import type {
-  FinancialProvider,
-  NormalizedTransaction,
-  ProviderConnectionRef,
+import {
+  ProviderCursorInvalidError,
+  ProviderSyncMutationError,
+  type FinancialProvider,
+  type NormalizedTransaction,
+  type ProviderConnectionRef,
 } from "@financial-os/providers";
 import type {
   AccountDocument,
@@ -15,7 +17,7 @@ import type {
   UpsertAccountInput,
   UpsertTransactionInput,
 } from "@financial-os/db";
-import { toTransactionInput, utcDayStart, utcMonthStart } from "./normalize.js";
+import { UNCATEGORIZED, toTransactionInput, utcDayStart, utcMonthStart } from "./normalize.js";
 
 /** Structural slices of the real repositories — narrow on purpose, so this
  * function states exactly what it touches and tests can supply fakes
@@ -25,6 +27,7 @@ export interface SyncConnectionDeps {
   connections: {
     findByIdWithAccessToken(connectionId: string): Promise<ConnectionDocument | null>;
     updateCursor(connectionId: string, cursor: string): Promise<void>;
+    resetCursor(connectionId: string): Promise<void>;
   };
   accounts: {
     findByConnectionId(connectionId: string): Promise<AccountDocument[]>;
@@ -34,6 +37,7 @@ export interface SyncConnectionDeps {
     upsertFromSync(input: UpsertTransactionInput): Promise<TransactionDocument>;
     findByProviderTransactionId(providerTransactionId: string): Promise<TransactionDocument | null>;
     markRemoved(providerTransactionId: string): Promise<void>;
+    updateCategory(transactionId: string, category: TransactionDocument["category"]): Promise<void>;
   };
   rawPayloads: {
     insert(input: InsertRawPayloadInput): Promise<void>;
@@ -59,6 +63,15 @@ export interface SyncConnectionResult {
    * — skipped rather than dropped silently. Their raw payloads are still
    * stored, so they can be replayed once the account exists (§3.1). */
   skippedUnknownAccount: string[];
+  /** Pending transactions superseded by a posted counterpart this run
+   * (ING-9). */
+  pendingSuperseded: string[];
+  /** How many times the drain had to restart because the provider
+   * reported the data moved underneath it (ING-11). Non-zero is worth
+   * noticing; persistently non-zero means something upstream is churning. */
+  drainRestarts: number;
+  /** True if a stale cursor forced a full resync from empty (ING-11). */
+  cursorWasReset: boolean;
 }
 
 export class ConnectionNotFoundError extends Error {
@@ -67,6 +80,11 @@ export class ConnectionNotFoundError extends Error {
     this.name = "ConnectionNotFoundError";
   }
 }
+
+/** A provider stuck reporting mid-pagination mutations must not spin the
+ * worker forever; after this many restarts the job fails and BullMQ's
+ * backoff takes over. */
+const MAX_DRAIN_ATTEMPTS = 3;
 
 /**
  * Drains one connection's provider sync cursor to completion.
@@ -89,104 +107,188 @@ export async function syncConnection(
     accessToken: connection.accessToken,
   };
 
+  // Account lookups are a cache, deliberately shared across drain
+  // attempts: a restart shouldn't re-fetch the account list.
   let accountIdsByProviderId = await loadAccountMap(deps, connectionId);
   let refreshedAccounts = false;
 
-  const dayBuckets = new Map<string, Date>();
-  const monthBuckets = new Map<string, Date>();
-  const syncedTransactionIds: string[] = [];
-  const skippedUnknownAccount: string[] = [];
+  /** One full pagination pass. Its accumulators are local so a restart
+   * (ING-11) reports what the successful pass actually did, rather than
+   * summing in the work of an abandoned one. */
+  async function drain(
+    startCursor: string | null,
+  ): Promise<Omit<SyncConnectionResult, "drainRestarts" | "cursorWasReset">> {
+    const dayBuckets = new Map<string, Date>();
+    const monthBuckets = new Map<string, Date>();
+    const syncedTransactionIds: string[] = [];
+    const skippedUnknownAccount: string[] = [];
+    const pendingSuperseded: string[] = [];
 
-  let cursor: string | null = connection.cursor ?? null;
-  let pagesProcessed = 0;
-  let added = 0;
-  let modified = 0;
-  let removed = 0;
-  let hasMore = true;
+    let cursor: string | null = startCursor;
+    let pagesProcessed = 0;
+    let added = 0;
+    let modified = 0;
+    let removed = 0;
+    let hasMore = true;
 
-  function recordBucket(date: Date): void {
-    const day = utcDayStart(date);
-    const month = utcMonthStart(date);
-    dayBuckets.set(day.toISOString(), day);
-    monthBuckets.set(month.toISOString(), month);
-  }
-
-  async function applyUpsert(tx: NormalizedTransaction): Promise<void> {
-    // Raw first, always: whatever the bank sent is preserved even if the
-    // normalization below rejects it (§3.1's replay-ability guarantee).
-    await deps.rawPayloads.insert({
-      userId,
-      source: "plaid",
-      type: "transaction",
-      providerId: tx.providerTransactionId,
-      payload: tx,
-    });
-
-    let accountId = accountIdsByProviderId.get(tx.accountProviderId);
-
-    // A new account added to an existing Item can appear in transactions
-    // before anything re-read the account list. Refresh once per run, not
-    // once per orphaned transaction.
-    if (!accountId && !refreshedAccounts) {
-      refreshedAccounts = true;
-      await refreshAccounts(deps, { userId, connectionId: connectionObjectId }, ref);
-      accountIdsByProviderId = await loadAccountMap(deps, connectionId);
-      accountId = accountIdsByProviderId.get(tx.accountProviderId);
+    function recordBucket(date: Date): void {
+      const day = utcDayStart(date);
+      const month = utcMonthStart(date);
+      dayBuckets.set(day.toISOString(), day);
+      monthBuckets.set(month.toISOString(), month);
     }
 
-    if (!accountId) {
-      skippedUnknownAccount.push(tx.providerTransactionId);
-      return;
+    /** Pending→posted reconciliation (ING-9, §6). Plaid posts a settled
+     * transaction under a NEW id, pointing back at the pending one via
+     * pending_transaction_id. Leaving both live is, per §6, the single
+     * most common source of double-counted spending in Plaid
+     * integrations. */
+    async function supersedePending(
+      tx: NormalizedTransaction,
+      postedId: TransactionDocument["_id"],
+    ): Promise<void> {
+      if (!tx.pendingTransactionId) return;
+
+      const pending = await deps.transactions.findByProviderTransactionId(tx.pendingTransactionId);
+      if (!pending || pending.isRemoved) return;
+
+      // Carry a real category across. The posted row is a different
+      // document, so without this every Tier 1/2/3 result — and worse,
+      // every manual Tier 4 correction the user made while it was
+      // pending — is silently discarded the moment it settles.
+      if (pending.category && pending.category.value !== UNCATEGORIZED.value) {
+        await deps.transactions.updateCategory(postedId.toString(), pending.category);
+      }
+
+      // The pending row may sit in an earlier bucket than the posted one
+      // (authorized Friday, settles Monday), and that bucket already
+      // counted it — so it needs recomputing too.
+      recordBucket(pending.date);
+      await deps.transactions.markRemoved(tx.pendingTransactionId);
+      pendingSuperseded.push(tx.pendingTransactionId);
     }
 
-    await deps.transactions.upsertFromSync(toTransactionInput(tx, { userId, accountId }));
-    recordBucket(tx.date);
-    syncedTransactionIds.push(tx.providerTransactionId);
-  }
+    async function applyUpsert(tx: NormalizedTransaction): Promise<void> {
+      // Raw first, always: whatever the bank sent is preserved even if the
+      // normalization below rejects it (§3.1's replay-ability guarantee).
+      await deps.rawPayloads.insert({
+        userId,
+        source: "plaid",
+        type: "transaction",
+        providerId: tx.providerTransactionId,
+        payload: tx,
+      });
 
-  while (hasMore) {
-    const pageResult = await deps.provider.syncTransactions(ref, cursor);
+      let accountId = accountIdsByProviderId.get(tx.accountProviderId);
 
-    for (const tx of pageResult.added) {
-      await applyUpsert(tx);
-      added += 1;
-    }
-    for (const tx of pageResult.modified) {
-      await applyUpsert(tx);
-      modified += 1;
-    }
+      // A new account added to an existing Item can appear in transactions
+      // before anything re-read the account list. Refresh once per run, not
+      // once per orphaned transaction.
+      if (!accountId && !refreshedAccounts) {
+        refreshedAccounts = true;
+        await refreshAccounts(deps, { userId, connectionId: connectionObjectId }, ref);
+        accountIdsByProviderId = await loadAccountMap(deps, connectionId);
+        accountId = accountIdsByProviderId.get(tx.accountProviderId);
+      }
 
-    for (const entry of pageResult.removed) {
-      // Read the date before soft-deleting: the rollup bucket that already
-      // counted this transaction is exactly the one needing recompute
-      // (ADR-0008, and the soft-delete propagation case in §6).
-      const existing = await deps.transactions.findByProviderTransactionId(
-        entry.providerTransactionId,
+      if (!accountId) {
+        // Note this returns BEFORE supersedePending: the posted row never
+        // landed, so removing its pending counterpart would delete the
+        // only record of that spend we still have.
+        skippedUnknownAccount.push(tx.providerTransactionId);
+        return;
+      }
+
+      const posted = await deps.transactions.upsertFromSync(
+        toTransactionInput(tx, { userId, accountId }),
       );
-      if (existing) recordBucket(existing.date);
-      await deps.transactions.markRemoved(entry.providerTransactionId);
-      removed += 1;
+      recordBucket(tx.date);
+      syncedTransactionIds.push(tx.providerTransactionId);
+
+      await supersedePending(tx, posted._id);
     }
 
-    // Persisted per page, not once at the end (§2.2): a crash on page 4
-    // resumes from page 3's cursor instead of replaying the whole drain.
-    await deps.connections.updateCursor(connectionId, pageResult.nextCursor);
-    cursor = pageResult.nextCursor;
-    pagesProcessed += 1;
-    hasMore = pageResult.hasMore;
+    while (hasMore) {
+      const pageResult = await deps.provider.syncTransactions(ref, cursor);
+
+      for (const tx of pageResult.added) {
+        await applyUpsert(tx);
+        added += 1;
+      }
+      for (const tx of pageResult.modified) {
+        await applyUpsert(tx);
+        modified += 1;
+      }
+
+      for (const entry of pageResult.removed) {
+        // Read the date before soft-deleting: the rollup bucket that already
+        // counted this transaction is exactly the one needing recompute
+        // (ADR-0008, and the soft-delete propagation case in §6).
+        const existing = await deps.transactions.findByProviderTransactionId(
+          entry.providerTransactionId,
+        );
+        if (existing) recordBucket(existing.date);
+        await deps.transactions.markRemoved(entry.providerTransactionId);
+        removed += 1;
+      }
+
+      // Persisted per page, not once at the end (§2.2): a crash on page 4
+      // resumes from page 3's cursor instead of replaying the whole drain.
+      await deps.connections.updateCursor(connectionId, pageResult.nextCursor);
+      cursor = pageResult.nextCursor;
+      pagesProcessed += 1;
+      hasMore = pageResult.hasMore;
+    }
+
+    return {
+      pagesProcessed,
+      added,
+      modified,
+      removed,
+      finalCursor: cursor,
+      touchedDayBuckets: [...dayBuckets.values()],
+      touchedMonthBuckets: [...monthBuckets.values()],
+      syncedTransactionIds,
+      skippedUnknownAccount,
+      pendingSuperseded,
+    };
   }
 
-  return {
-    pagesProcessed,
-    added,
-    modified,
-    removed,
-    finalCursor: cursor,
-    touchedDayBuckets: [...dayBuckets.values()],
-    touchedMonthBuckets: [...monthBuckets.values()],
-    syncedTransactionIds,
-    skippedUnknownAccount,
-  };
+  // Cursor-drift handling (ING-11, §6). Two distinct failures, two
+  // distinct recoveries — conflating them is the trap here, since treating
+  // a mutation as an invalid cursor throws away a perfectly good cursor
+  // and forces a needless full resync.
+  const startingCursor: string | null = connection.cursor ?? null;
+  let attemptCursor: string | null = startingCursor;
+  let drainRestarts = 0;
+  let cursorWasReset = false;
+
+  for (;;) {
+    try {
+      const result = await drain(attemptCursor);
+      return { ...result, drainRestarts, cursorWasReset };
+    } catch (err) {
+      if (err instanceof ProviderCursorInvalidError && !cursorWasReset) {
+        // The stored cursor is unusable. Clear it and start over from
+        // empty — a full resync, which upserts make safe to repeat.
+        await deps.connections.resetCursor(connectionId);
+        cursorWasReset = true;
+        attemptCursor = null;
+        continue;
+      }
+
+      if (err instanceof ProviderSyncMutationError && drainRestarts < MAX_DRAIN_ATTEMPTS - 1) {
+        // The data moved mid-pagination, so the pages gathered so far are
+        // not a consistent view. Restart from where this run began — the
+        // stored cursor stays untouched.
+        drainRestarts += 1;
+        attemptCursor = cursorWasReset ? null : startingCursor;
+        continue;
+      }
+
+      throw err;
+    }
+  }
 }
 
 async function loadAccountMap(

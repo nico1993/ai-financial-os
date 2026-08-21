@@ -65,7 +65,25 @@ export class ConnectionRepository {
     );
   }
 
+  /** Drops the stored cursor so the next run starts from scratch — the
+   * "reset and full resync" path §6 calls for when a cursor goes stale
+   * (ING-11). `$unset` rather than setting an empty string: the provider
+   * adapter treats a missing cursor as "first sync", and an empty string
+   * is not the same thing to Plaid. */
+  async resetCursor(connectionId: string): Promise<void> {
+    await ConnectionModel.updateOne({ _id: connectionId }, { $unset: { cursor: "" } });
+  }
+
   async updateStatus(connectionId: string, status: ConnectionStatus): Promise<void> {
     await ConnectionModel.updateOne({ _id: connectionId }, { $set: { status } });
+  }
+
+  /** Connections the scheduled fallback poll should actually sync
+   * (ING-8). Deliberately excludes `login_required` and `error`: §6 is
+   * explicit that a broken Item should stop being retried until the user
+   * acts, and a 4-hourly poll is exactly the "burning retry budget
+   * indefinitely" it warns about. */
+  async findSyncable(): Promise<ConnectionDocument[]> {
+    return ConnectionModel.find({ status: "active" }).lean<ConnectionDocument[]>();
   }
 }

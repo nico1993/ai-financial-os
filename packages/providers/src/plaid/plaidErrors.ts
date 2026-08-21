@@ -3,7 +3,14 @@
 // `unknown` structurally rather than importing axios's types, so it can be
 // unit-tested against hand-built error shapes and doesn't tie this package
 // to whichever HTTP client the Plaid SDK ships with.
-import { ProviderRateLimitError, type ProviderError } from "../errors.js";
+import {
+  ProviderConnectionRevokedError,
+  ProviderCursorInvalidError,
+  ProviderRateLimitError,
+  ProviderReauthRequiredError,
+  ProviderSyncMutationError,
+  type ProviderError,
+} from "../errors.js";
 
 interface PlaidErrorBody {
   error_type?: unknown;
@@ -58,20 +65,67 @@ export function parseRetryAfterMs(
  * which case the caller rethrows the original, preserving its stack and
  * message rather than flattening every failure into a generic wrapper.
  */
+/** Plaid error codes that mean a human has to re-authenticate the Item
+ * before it will ever sync again. */
+const REAUTH_REQUIRED_CODES = new Set(["ITEM_LOGIN_REQUIRED", "ITEM_LOCKED"]);
+
+/** Codes where re-auth won't help — the link has to be recreated. */
+const REVOKED_CODES = new Set([
+  "USER_PERMISSION_REVOKED",
+  "USER_ACCOUNT_REVOKED",
+  "ITEM_NOT_FOUND",
+  "ITEM_NOT_SUPPORTED",
+  "ACCESS_NOT_GRANTED",
+]);
+
+/** Codes meaning the stored cursor can no longer be used at all, so
+ * recovery is a full resync from an empty cursor. */
+const CURSOR_INVALID_CODES = new Set([
+  "TRANSACTIONS_SYNC_INVALID_CURSOR",
+  "INVALID_CURSOR",
+  "TRANSACTIONS_SYNC_CURSOR_NOT_FOUND",
+]);
+
 export function mapPlaidError(err: unknown): ProviderError | undefined {
   const { status, headers, body } = readHttpError(err);
+  const code = typeof body?.error_code === "string" ? body.error_code : undefined;
+  const detail = typeof body?.error_message === "string" ? body.error_message : undefined;
 
   const isRateLimited =
-    status === 429 ||
-    body?.error_type === "RATE_LIMIT_EXCEEDED" ||
-    body?.error_code === "RATE_LIMIT_EXCEEDED";
+    status === 429 || body?.error_type === "RATE_LIMIT_EXCEEDED" || code === "RATE_LIMIT_EXCEEDED";
 
   if (isRateLimited) {
-    const detail =
-      typeof body?.error_message === "string" ? body.error_message : "Plaid rate limit exceeded";
-    return new ProviderRateLimitError(detail, {
+    return new ProviderRateLimitError(detail ?? "Plaid rate limit exceeded", {
       cause: err,
       retryAfterMs: parseRetryAfterMs(headers),
+    });
+  }
+
+  if (code && REAUTH_REQUIRED_CODES.has(code)) {
+    return new ProviderReauthRequiredError(detail ?? `Plaid item needs re-auth (${code})`, {
+      cause: err,
+    });
+  }
+
+  if (code && REVOKED_CODES.has(code)) {
+    return new ProviderConnectionRevokedError(detail ?? `Plaid item unusable (${code})`, {
+      cause: err,
+    });
+  }
+
+  // Ordering matters here: the mutation case is recoverable by restarting
+  // the drain and must NOT be mistaken for an invalid cursor, which would
+  // throw away a good cursor and force a needless full resync.
+  if (code === "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION") {
+    return new ProviderSyncMutationError(
+      detail ?? "Transactions changed during pagination; restart the drain",
+      { cause: err },
+    );
+  }
+
+  if (code && CURSOR_INVALID_CODES.has(code)) {
+    return new ProviderCursorInvalidError(detail ?? `Plaid cursor unusable (${code})`, {
+      cause: err,
     });
   }
 

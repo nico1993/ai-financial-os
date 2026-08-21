@@ -94,6 +94,32 @@ describe("ConnectionRepository", () => {
     expect(found?.lastSyncedAt).toBeInstanceOf(Date);
   });
 
+  it("resetCursor clears the cursor so the next sync starts from scratch", async () => {
+    const created = await repo.upsertFromSync(baseInput());
+    await repo.updateCursor(created._id.toString(), "cursor-stale");
+
+    await repo.resetCursor(created._id.toString());
+
+    const found = await repo.findById(created._id.toString());
+    // Unset, not empty-string: the adapter treats absent as "first sync",
+    // and an empty cursor is not the same thing to the provider.
+    expect(found?.cursor).toBeUndefined();
+  });
+
+  it("findSyncable returns only active connections", async () => {
+    const active = await repo.upsertFromSync(baseInput());
+    const broken = await repo.upsertFromSync(baseInput({ providerItemId: "item-broken" }));
+    const errored = await repo.upsertFromSync(baseInput({ providerItemId: "item-errored" }));
+    await repo.updateStatus(broken._id.toString(), "login_required");
+    await repo.updateStatus(errored._id.toString(), "error");
+
+    const syncable = await repo.findSyncable();
+
+    // A connection needing re-auth must not be re-polled every few hours
+    // -- that is the retry-budget burn §6 warns about.
+    expect(syncable.map((c) => c._id.toString())).toEqual([active._id.toString()]);
+  });
+
   it("updateStatus updates the status", async () => {
     const created = await repo.upsertFromSync(baseInput());
 

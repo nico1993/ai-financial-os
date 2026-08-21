@@ -77,13 +77,19 @@ export interface WebhookVerificationRequest {
   headers: Record<string, string | undefined>;
 }
 
+/** How a connection has broken, in provider-neutral terms — mirrors the
+ * error taxonomy in errors.ts, but arriving by webhook rather than as a
+ * thrown API failure (ING-10). */
+export type ProviderItemErrorKind = "reauth_required" | "revoked";
+
 /** A webhook, reduced to what the app layer can act on without knowing a
  * single provider-specific code (ADR-0024). `ignored` carries a
  * human-readable reason purely so an unexpected webhook shows up in logs
- * instead of vanishing. ING-10 adds an `item_error` member for the
- * re-auth path. */
+ * instead of vanishing. */
 export type ProviderWebhookEvent =
-  { type: "sync_updates_available"; providerItemId: string } | { type: "ignored"; reason: string };
+  | { type: "sync_updates_available"; providerItemId: string }
+  | { type: "item_error"; providerItemId: string; kind: ProviderItemErrorKind; detail: string }
+  | { type: "ignored"; reason: string };
 
 export interface CreateLinkTokenInput {
   /** Plaid's user.client_user_id — opaque, just needs to be stable per user. */

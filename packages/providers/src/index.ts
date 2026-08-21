@@ -11,13 +11,21 @@ export type {
   NormalizedAccountType,
   NormalizedTransaction,
   ProviderConnectionRef,
+  ProviderItemErrorKind,
   ProviderWebhookEvent,
   RemovedTransaction,
   SyncTransactionsResult,
   WebhookVerificationRequest,
 } from "./FinancialProvider.js";
 
-export { ProviderError, ProviderRateLimitError } from "./errors.js";
+export {
+  ProviderConnectionRevokedError,
+  ProviderCursorInvalidError,
+  ProviderError,
+  ProviderRateLimitError,
+  ProviderReauthRequiredError,
+  ProviderSyncMutationError,
+} from "./errors.js";
 
 export { createPlaidClient, type PlaidClientConfig } from "./plaid/plaidClient.js";
 export { PlaidProvider, type PlaidProviderConfig } from "./plaid/PlaidProvider.js";

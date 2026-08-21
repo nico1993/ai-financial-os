@@ -12,6 +12,11 @@
 
 export const QUEUE_NAMES = {
   providerSync: "provider-sync",
+  /** ING-8's webhook-miss safety net. A separate queue from provider-sync
+   * on purpose (ADR-0025): provider-sync jobs are per-connection and
+   * carry a `sync:{connectionId}` dedup id, whereas this one is a single
+   * repeating fan-out with no connection of its own. */
+  providerSyncScheduler: "provider-sync-scheduler",
   categorizeLlm: "categorize-llm",
   transferMatching: "transfer-matching",
   rollups: "rollups",
@@ -33,6 +38,16 @@ export interface ProviderSyncJobData {
 export function providerSyncJobId(connectionId: string): string {
   return `sync:${connectionId}`;
 }
+
+/** The scheduled poll takes no payload — it derives its work list from
+ * the database at run time, so a connection linked since the schedule was
+ * registered is picked up without re-registering anything. */
+export type ProviderSyncScheduleJobData = Record<string, never>;
+
+/** Stable id for the repeating schedule (ING-8). BullMQ upserts a job
+ * scheduler by this id, so re-registering on every worker boot updates
+ * the existing schedule instead of stacking up duplicates. */
+export const PROVIDER_SYNC_SCHEDULER_ID = "provider-sync-fallback-poll";
 
 /** Structurally compatible with BullMQ's `JobsOptions` — declared here so
  * packages/shared doesn't need bullmq as a dependency. */

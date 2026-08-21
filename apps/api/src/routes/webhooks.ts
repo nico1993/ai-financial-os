@@ -29,7 +29,10 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
     // produce different bytes (key order, whitespace, number formatting),
     // so the hash would never match. Keeping the raw string is what makes
     // verification possible at all.
-    scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, raw, done) => {
+    // Fastify types this body as `string | Buffer` even under
+    // parseAs: "string", so normalize rather than assuming.
+    scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+      const raw = typeof body === "string" ? body : body.toString("utf8");
       try {
         done(null, { raw, parsed: JSON.parse(raw) } satisfies RawJsonBody);
       } catch {
@@ -78,12 +81,29 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
         return reply.send({ status: "unknown_connection" });
       }
 
+      const connectionId = connection._id.toString();
+
+      // Item error states (ING-10, §6). Plaid tells us an Item has broken
+      // by webhook as well as by API error, and this path usually arrives
+      // first — marking the Connection here stops ING-8's poll from
+      // re-trying it every few hours, since findSyncable() only returns
+      // "active" connections.
+      if (event.type === "item_error") {
+        const status = event.kind === "reauth_required" ? "login_required" : "error";
+        await connections.updateStatus(connectionId, status);
+        req.log.warn(
+          { connectionId, kind: event.kind, detail: event.detail },
+          "[webhook] provider reported an item error",
+        );
+        return reply.send({ status: "item_error_recorded" });
+      }
+
       // Enqueue and return immediately. The drain itself can take many
       // pages; holding the webhook open for it would risk Plaid's timeout
       // and a duplicate delivery.
-      await requestProviderSync(connection._id.toString());
+      await requestProviderSync(connectionId);
 
-      req.log.info({ connectionId: connection._id.toString() }, "[webhook] queued provider sync");
+      req.log.info({ connectionId }, "[webhook] queued provider sync");
       return reply.send({ status: "queued" });
     });
   });

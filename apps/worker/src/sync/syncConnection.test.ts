@@ -4,8 +4,10 @@ import type {
   NormalizedTransaction,
   SyncTransactionsResult,
 } from "@financial-os/providers";
+import { ProviderCursorInvalidError, ProviderSyncMutationError } from "@financial-os/providers";
 import type { AccountDocument, ConnectionDocument, TransactionDocument } from "@financial-os/db";
 import { syncConnection, type SyncConnectionDeps } from "./syncConnection.js";
+import { UNCATEGORIZED } from "./normalize.js";
 
 const CONNECTION_ID = "conn-1";
 
@@ -69,16 +71,28 @@ function page(overrides: Partial<SyncTransactionsResult> = {}): SyncTransactions
   };
 }
 
+function storedTransaction(overrides: Partial<TransactionDocument> = {}): TransactionDocument {
+  return {
+    _id: objectId("stored-1"),
+    date: new Date("2024-03-10T00:00:00.000Z"),
+    category: UNCATEGORIZED,
+    isRemoved: false,
+    ...overrides,
+  } as TransactionDocument;
+}
+
 interface Harness {
   deps: SyncConnectionDeps;
   calls: {
     syncCursors: (string | null)[];
     updatedCursors: string[];
+    cursorResets: number;
     upserted: string[];
     removed: string[];
     rawPayloads: string[];
     getAccountsCalls: number;
     accountUpserts: string[];
+    categoryUpdates: { transactionId: string; value: string }[];
   };
 }
 
@@ -93,11 +107,13 @@ function harness(options: {
   const calls: Harness["calls"] = {
     syncCursors: [],
     updatedCursors: [],
+    cursorResets: 0,
     upserted: [],
     removed: [],
     rawPayloads: [],
     getAccountsCalls: 0,
     accountUpserts: [],
+    categoryUpdates: [],
   };
 
   const pages = options.pages ?? [page()];
@@ -126,6 +142,9 @@ function harness(options: {
       async updateCursor(_id, cursor) {
         calls.updatedCursors.push(cursor);
       },
+      async resetCursor() {
+        calls.cursorResets += 1;
+      },
     },
     accounts: {
       async findByConnectionId() {
@@ -141,13 +160,16 @@ function harness(options: {
     transactions: {
       async upsertFromSync(input) {
         calls.upserted.push(input.providerTransactionId);
-        return {} as TransactionDocument;
+        return { _id: objectId(`db-${input.providerTransactionId}`) } as TransactionDocument;
       },
       async findByProviderTransactionId(id) {
         return options.existingTransactions?.[id] ?? null;
       },
       async markRemoved(id) {
         calls.removed.push(id);
+      },
+      async updateCategory(transactionId, category) {
+        calls.categoryUpdates.push({ transactionId, value: category.value });
       },
     },
     rawPayloads: {
@@ -268,6 +290,240 @@ describe("syncConnection — applying a page", () => {
   });
 });
 
+describe("syncConnection — pending to posted reconciliation (ING-9, §6)", () => {
+  it("soft-removes the pending record when its posted counterpart arrives", async () => {
+    // §6 calls this the single most common source of double-counted
+    // spending: leaving both the pending and the posted row live.
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [tx({ providerTransactionId: "tx-posted", pendingTransactionId: "tx-pending" })],
+        }),
+      ],
+      existingTransactions: { "tx-pending": storedTransaction() },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.upserted).toEqual(["tx-posted"]);
+    expect(calls.removed).toEqual(["tx-pending"]);
+    expect(result.pendingSuperseded).toEqual(["tx-pending"]);
+  });
+
+  it("records the pending record's own date bucket, not just the posted one's", async () => {
+    // A pending transaction that posts on a later date was already counted
+    // in the earlier bucket -- that rollup needs recomputing too.
+    const { deps } = harness({
+      pages: [
+        page({
+          added: [
+            tx({
+              providerTransactionId: "tx-posted",
+              pendingTransactionId: "tx-pending",
+              date: new Date("2024-03-15T00:00:00.000Z"),
+            }),
+          ],
+        }),
+      ],
+      existingTransactions: {
+        "tx-pending": storedTransaction({ date: new Date("2024-03-12T00:00:00.000Z") }),
+      },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(result.touchedDayBuckets.map((d) => d.toISOString()).sort()).toEqual([
+      "2024-03-12T00:00:00.000Z",
+      "2024-03-15T00:00:00.000Z",
+    ]);
+  });
+
+  it("carries a real category across from the pending record", async () => {
+    // Otherwise every manual Tier 4 correction on a pending transaction is
+    // silently thrown away the moment it posts.
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [tx({ providerTransactionId: "tx-posted", pendingTransactionId: "tx-pending" })],
+        }),
+      ],
+      existingTransactions: {
+        "tx-pending": storedTransaction({
+          category: { tier: 4, value: "Groceries", status: "confirmed" },
+        }),
+      },
+    });
+
+    await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([{ transactionId: "db-tx-posted", value: "Groceries" }]);
+  });
+
+  it("does not carry across the placeholder category", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [tx({ providerTransactionId: "tx-posted", pendingTransactionId: "tx-pending" })],
+        }),
+      ],
+      existingTransactions: { "tx-pending": storedTransaction({ category: UNCATEGORIZED }) },
+    });
+
+    await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([]);
+  });
+
+  it("does nothing extra when the pending record was never stored locally", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [tx({ providerTransactionId: "tx-posted", pendingTransactionId: "tx-missing" })],
+        }),
+      ],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.removed).toEqual([]);
+    expect(result.pendingSuperseded).toEqual([]);
+  });
+
+  it("ignores a pending link on a transaction whose account is unresolvable", async () => {
+    // The posted row was skipped, so superseding its pending counterpart
+    // would delete the only copy of that spend we still have.
+    const { deps, calls } = harness({
+      accounts: [accountDoc("plaid-acct-1")],
+      refreshedAccounts: [],
+      pages: [
+        page({
+          added: [
+            tx({
+              providerTransactionId: "tx-orphan",
+              accountProviderId: "plaid-acct-ghost",
+              pendingTransactionId: "tx-pending",
+            }),
+          ],
+        }),
+      ],
+      existingTransactions: { "tx-pending": storedTransaction() },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.removed).toEqual([]);
+    expect(result.skippedUnknownAccount).toEqual(["tx-orphan"]);
+  });
+});
+
+describe("syncConnection — cursor drift (ING-11, §6)", () => {
+  it("restarts the drain from the run's starting cursor on a mutation error", async () => {
+    // Plaid's guidance for TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION:
+    // the pages collected so far are no longer a consistent view, so start
+    // the pagination again -- not retry the failed page.
+    const { deps, calls } = harness({
+      connection: connectionDoc({ cursor: "cursor-start" }),
+      syncImpl: async (_cursor, index) => {
+        if (index === 0) return page({ nextCursor: "cursor-1", hasMore: true });
+        if (index === 1) throw new ProviderSyncMutationError("data moved under us");
+        return page({ nextCursor: "cursor-final", hasMore: false });
+      },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.syncCursors).toEqual(["cursor-start", "cursor-1", "cursor-start"]);
+    expect(result.finalCursor).toBe("cursor-final");
+    expect(result.drainRestarts).toBe(1);
+  });
+
+  it("does not reset the stored cursor for a mutation error", async () => {
+    // Conflating this with an invalid cursor would throw away a good
+    // cursor and force a needless full resync.
+    const { deps, calls } = harness({
+      connection: connectionDoc({ cursor: "cursor-start" }),
+      syncImpl: async (_cursor, index) => {
+        if (index === 0) throw new ProviderSyncMutationError("data moved under us");
+        return page({ nextCursor: "cursor-final", hasMore: false });
+      },
+    });
+
+    await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.cursorResets).toBe(0);
+  });
+
+  it("gives up rather than restarting forever on a persistent mutation error", async () => {
+    const { deps, calls } = harness({
+      connection: connectionDoc({ cursor: "cursor-start" }),
+      syncImpl: async () => {
+        throw new ProviderSyncMutationError("data keeps moving");
+      },
+    });
+
+    await expect(syncConnection(CONNECTION_ID, deps)).rejects.toBeInstanceOf(
+      ProviderSyncMutationError,
+    );
+    // Bounded: a provider stuck in this state must not spin the worker.
+    expect(calls.syncCursors.length).toBeLessThanOrEqual(4);
+  });
+
+  it("clears the stored cursor and resyncs from empty when the cursor is invalid", async () => {
+    const { deps, calls } = harness({
+      connection: connectionDoc({ cursor: "cursor-stale" }),
+      syncImpl: async (cursor) => {
+        if (cursor !== null) throw new ProviderCursorInvalidError("cursor no longer valid");
+        return page({ nextCursor: "cursor-fresh", hasMore: false });
+      },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.syncCursors).toEqual(["cursor-stale", null]);
+    expect(calls.cursorResets).toBe(1);
+    expect(result.finalCursor).toBe("cursor-fresh");
+    expect(result.cursorWasReset).toBe(true);
+  });
+
+  it("does not reset the cursor twice if the fresh drain also reports an invalid cursor", async () => {
+    const { deps, calls } = harness({
+      connection: connectionDoc({ cursor: "cursor-stale" }),
+      syncImpl: async () => {
+        throw new ProviderCursorInvalidError("cursor no longer valid");
+      },
+    });
+
+    await expect(syncConnection(CONNECTION_ID, deps)).rejects.toBeInstanceOf(
+      ProviderCursorInvalidError,
+    );
+    expect(calls.cursorResets).toBe(1);
+  });
+
+  it("does not double-count work from the abandoned attempt after a restart", async () => {
+    const { deps } = harness({
+      connection: connectionDoc({ cursor: "cursor-start" }),
+      syncImpl: async (_cursor, index) => {
+        if (index === 0) {
+          return page({
+            added: [tx({ providerTransactionId: "tx-a" })],
+            nextCursor: "cursor-1",
+            hasMore: true,
+          });
+        }
+        if (index === 1) throw new ProviderSyncMutationError("data moved under us");
+        return page({ added: [tx({ providerTransactionId: "tx-a" })], hasMore: false });
+      },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    // One transaction actually exists, so the run should report one.
+    expect(result.added).toBe(1);
+    expect(result.pagesProcessed).toBe(1);
+    expect(result.syncedTransactionIds).toEqual(["tx-a"]);
+  });
+});
+
 describe("syncConnection — touched date buckets (ADR-0008)", () => {
   it("collects the UTC day and month bucket of each upserted transaction", async () => {
     const { deps } = harness({
@@ -300,7 +556,7 @@ describe("syncConnection — touched date buckets (ADR-0008)", () => {
     const { deps } = harness({
       pages: [page({ removed: [{ providerTransactionId: "tx-gone" }] })],
       existingTransactions: {
-        "tx-gone": { date: new Date("2024-01-09T00:00:00.000Z") } as TransactionDocument,
+        "tx-gone": storedTransaction({ date: new Date("2024-01-09T00:00:00.000Z") }),
       },
     });
 

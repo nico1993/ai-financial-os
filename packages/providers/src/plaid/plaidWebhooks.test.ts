@@ -29,18 +29,58 @@ describe("parsePlaidWebhook", () => {
     }
   });
 
-  it("ignores ITEM webhooks for now, naming the code so ING-10 can find them", () => {
+  it("maps an ITEM ERROR webhook's nested error_code to a re-auth item error", () => {
     const event = parsePlaidWebhook({
       webhook_type: "ITEM",
       webhook_code: "ERROR",
       item_id: "item-abc",
-      error: { error_code: "ITEM_LOGIN_REQUIRED" },
+      error: { error_code: "ITEM_LOGIN_REQUIRED", error_message: "the user must log in again" },
     });
 
-    expect(event.type).toBe("ignored");
-    if (event.type === "ignored") {
-      expect(event.reason).toContain("ITEM");
-      expect(event.reason).toContain("ERROR");
+    expect(event).toEqual({
+      type: "item_error",
+      providerItemId: "item-abc",
+      kind: "reauth_required",
+      detail: "the user must log in again",
+    });
+  });
+
+  it("maps revocation to kind 'revoked' rather than 'reauth_required'", () => {
+    // Re-auth is a Link update-mode flow; revoked means the connection has
+    // to be created again, so the two must not collapse into one state.
+    const event = parsePlaidWebhook({
+      webhook_type: "ITEM",
+      webhook_code: "USER_PERMISSION_REVOKED",
+      item_id: "item-abc",
+    });
+
+    expect(event.type).toBe("item_error");
+    if (event.type === "item_error") expect(event.kind).toBe("revoked");
+  });
+
+  it("treats PENDING_EXPIRATION as needing re-auth before it lapses", () => {
+    const event = parsePlaidWebhook({
+      webhook_type: "ITEM",
+      webhook_code: "PENDING_EXPIRATION",
+      item_id: "item-abc",
+    });
+
+    expect(event.type).toBe("item_error");
+    if (event.type === "item_error") expect(event.kind).toBe("reauth_required");
+  });
+
+  it("ignores ITEM webhooks that aren't failures", () => {
+    for (const code of [
+      "LOGIN_REPAIRED",
+      "NEW_ACCOUNTS_AVAILABLE",
+      "WEBHOOK_UPDATE_ACKNOWLEDGED",
+    ]) {
+      const event = parsePlaidWebhook({
+        webhook_type: "ITEM",
+        webhook_code: code,
+        item_id: "item-abc",
+      });
+      expect(event.type).toBe("ignored");
     }
   });
 

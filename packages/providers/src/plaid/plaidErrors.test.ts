@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { ProviderRateLimitError } from "../errors.js";
+import {
+  ProviderConnectionRevokedError,
+  ProviderCursorInvalidError,
+  ProviderRateLimitError,
+  ProviderReauthRequiredError,
+  ProviderSyncMutationError,
+} from "../errors.js";
 import { mapPlaidError, parseRetryAfterMs, withPlaidErrorMapping } from "./plaidErrors.js";
 
 /** An axios-shaped rejection, which is what the Plaid SDK throws. */
@@ -70,8 +76,48 @@ describe("mapPlaidError", () => {
   it("returns undefined for errors nothing upstream treats specially", () => {
     expect(mapPlaidError(plaidError({ status: 500 }))).toBeUndefined();
     expect(
-      mapPlaidError(plaidError({ status: 400, body: { error_code: "ITEM_LOGIN_REQUIRED" } })),
+      mapPlaidError(plaidError({ status: 400, body: { error_code: "INTERNAL_SERVER_ERROR" } })),
     ).toBeUndefined();
+  });
+});
+
+describe("mapPlaidError — item state (ING-10)", () => {
+  it("maps ITEM_LOGIN_REQUIRED to a re-auth error", () => {
+    const mapped = mapPlaidError(
+      plaidError({ status: 400, body: { error_code: "ITEM_LOGIN_REQUIRED" } }),
+    );
+    expect(mapped).toBeInstanceOf(ProviderReauthRequiredError);
+  });
+
+  it("maps revoked-access codes to a revoked error, not a re-auth one", () => {
+    // The distinction matters: re-auth is a Link update-mode flow, revoked
+    // means the connection has to be created again from scratch.
+    for (const code of ["USER_PERMISSION_REVOKED", "ITEM_NOT_FOUND"]) {
+      const mapped = mapPlaidError(plaidError({ status: 400, body: { error_code: code } }));
+      expect(mapped).toBeInstanceOf(ProviderConnectionRevokedError);
+    }
+  });
+});
+
+describe("mapPlaidError — cursor drift (ING-11)", () => {
+  it("maps a mutation-during-pagination to its own error, NOT an invalid cursor", () => {
+    // Conflating these would throw away a perfectly good cursor and force
+    // a full resync when restarting the drain would have been enough.
+    const mapped = mapPlaidError(
+      plaidError({
+        status: 400,
+        body: { error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" },
+      }),
+    );
+    expect(mapped).toBeInstanceOf(ProviderSyncMutationError);
+    expect(mapped).not.toBeInstanceOf(ProviderCursorInvalidError);
+  });
+
+  it("maps an unusable cursor to ProviderCursorInvalidError", () => {
+    const mapped = mapPlaidError(
+      plaidError({ status: 400, body: { error_code: "TRANSACTIONS_SYNC_INVALID_CURSOR" } }),
+    );
+    expect(mapped).toBeInstanceOf(ProviderCursorInvalidError);
   });
 
   it("does not throw on errors that aren't HTTP-shaped at all", () => {

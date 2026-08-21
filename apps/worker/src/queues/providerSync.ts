@@ -3,14 +3,18 @@
 // syncConnection(), log the outcome, translate a provider rate limit into
 // a queue-wide pause. Any logic that grows here should move into sync/
 // instead, where it can be tested without a Redis.
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   AccountRepository,
   ConnectionRepository,
   RawPayloadRepository,
   TransactionRepository,
 } from "@financial-os/db";
-import { ProviderRateLimitError } from "@financial-os/providers";
+import {
+  ProviderConnectionRevokedError,
+  ProviderRateLimitError,
+  ProviderReauthRequiredError,
+} from "@financial-os/providers";
 import { QUEUE_NAMES, type ProviderSyncJobData } from "@financial-os/shared";
 import { env } from "../env.js";
 import { getRedisConnection } from "../redis.js";
@@ -49,8 +53,21 @@ async function runSync(connectionId: string): Promise<SyncConnectionResult> {
     );
   }
 
+  if (result.cursorWasReset) {
+    console.warn(
+      `[provider-sync] connection=${connectionId} had a stale cursor; completed a full resync from empty`,
+    );
+  }
+  if (result.drainRestarts > 0) {
+    // Occasional restarts are normal (the bank posted something mid-drain);
+    // persistent ones mean the Item is churning faster than we can page it.
+    console.warn(
+      `[provider-sync] connection=${connectionId} restarted its drain ${result.drainRestarts}x due to mid-pagination mutations`,
+    );
+  }
+
   console.info(
-    `[provider-sync] connection=${connectionId} pages=${result.pagesProcessed} added=${result.added} modified=${result.modified} removed=${result.removed}`,
+    `[provider-sync] connection=${connectionId} pages=${result.pagesProcessed} added=${result.added} modified=${result.modified} removed=${result.removed} pendingSuperseded=${result.pendingSuperseded.length}`,
   );
 
   // Two seams deliberately left unwired, each owned by a later story:
@@ -74,9 +91,34 @@ export function createProviderSyncWorker(): Worker<ProviderSyncJobData, SyncConn
   >(
     QUEUE_NAMES.providerSync,
     async (job: Job<ProviderSyncJobData>) => {
+      const { connectionId } = job.data;
       try {
-        return await runSync(job.data.connectionId);
+        return await runSync(connectionId);
       } catch (err) {
+        // Item error states (ING-10, §6). Both mean retrying is pointless
+        // until a human acts, so the Connection is marked and the job is
+        // failed as UNRECOVERABLE — that stops BullMQ's remaining attempts
+        // immediately rather than burning the retry budget (and Plaid's
+        // rate limit) against an Item that cannot succeed. ING-8's poll
+        // then skips it, because findSyncable() only returns "active".
+        if (err instanceof ProviderReauthRequiredError) {
+          await connections.updateStatus(connectionId, "login_required");
+          console.warn(
+            `[provider-sync] connection=${connectionId} needs re-auth, marked login_required:`,
+            err.message,
+          );
+          throw new UnrecoverableError(`Connection ${connectionId} requires re-authentication`);
+        }
+
+        if (err instanceof ProviderConnectionRevokedError) {
+          await connections.updateStatus(connectionId, "error");
+          console.error(
+            `[provider-sync] connection=${connectionId} revoked at the provider, marked error:`,
+            err.message,
+          );
+          throw new UnrecoverableError(`Connection ${connectionId} was revoked at the provider`);
+        }
+
         if (err instanceof ProviderRateLimitError) {
           // Plaid's limits are per-client, not per-connection, so backing
           // off this one job would just let the next connection trip the
