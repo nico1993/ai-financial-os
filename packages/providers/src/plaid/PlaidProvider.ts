@@ -15,10 +15,12 @@ import {
 } from "plaid";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 import { withPlaidErrorMapping } from "./plaidErrors.js";
+import { parsePlaidWebhook } from "./plaidWebhooks.js";
 import type {
   ConnectionResult,
   CreateLinkTokenInput,
   FinancialProvider,
+  ProviderWebhookEvent,
   NormalizedAccount,
   NormalizedAccountType,
   NormalizedTransaction,
@@ -181,6 +183,10 @@ export class PlaidProvider implements FinancialProvider {
       // it exists to handle.
       return false;
     }
+  }
+
+  parseWebhook(body: unknown): ProviderWebhookEvent {
+    return parsePlaidWebhook(body);
   }
 
   private async resolveInstitutionName(accessToken: string): Promise<string> {

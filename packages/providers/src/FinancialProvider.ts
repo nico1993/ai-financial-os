@@ -77,6 +77,14 @@ export interface WebhookVerificationRequest {
   headers: Record<string, string | undefined>;
 }
 
+/** A webhook, reduced to what the app layer can act on without knowing a
+ * single provider-specific code (ADR-0024). `ignored` carries a
+ * human-readable reason purely so an unexpected webhook shows up in logs
+ * instead of vanishing. ING-10 adds an `item_error` member for the
+ * re-auth path. */
+export type ProviderWebhookEvent =
+  { type: "sync_updates_available"; providerItemId: string } | { type: "ignored"; reason: string };
+
 export interface CreateLinkTokenInput {
   /** Plaid's user.client_user_id — opaque, just needs to be stable per user. */
   userId: string;
@@ -104,4 +112,9 @@ export interface FinancialProvider {
    * is trusted (ARCHITECTURE.md §5 — the webhook endpoint is
    * internet-reachable). */
   verifyWebhook(req: WebhookVerificationRequest): Promise<boolean>;
+  /** Reduces a verified webhook body to a provider-neutral event, so the
+   * receiving route never reads a Plaid `webhook_code` (ADR-0024). Total
+   * by contract: unrecognized or malformed bodies come back as `ignored`
+   * rather than throwing. Call only after verifyWebhook() passes. */
+  parseWebhook(body: unknown): ProviderWebhookEvent;
 }

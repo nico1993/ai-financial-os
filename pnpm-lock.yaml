@@ -38,9 +38,15 @@ importers:
       '@financial-os/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@financial-os/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
+      bullmq:
+        specifier: ^5.34.6
+        version: 5.81.3
       fastify:
         specifier: ^5.2.0
         version: 5.12.1

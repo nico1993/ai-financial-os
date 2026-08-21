@@ -11,6 +11,7 @@ export type {
   NormalizedAccountType,
   NormalizedTransaction,
   ProviderConnectionRef,
+  ProviderWebhookEvent,
   RemovedTransaction,
   SyncTransactionsResult,
   WebhookVerificationRequest,

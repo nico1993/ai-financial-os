@@ -61,7 +61,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
 - [x] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup). _Chose `jobId` dedup via a single shared `enqueueProviderSync()` helper; see ADR-0022 for why a mutex was unnecessary, and for the `removeOnComplete` trap and the accepted mid-run-trigger limitation._
 - [x] **ING-6** — Rate limiting + retry/backoff config on the `provider-sync` queue (429 handling). _Needed a provider-neutral error taxonomy first (ADR-0023) so a Plaid 429 could reach the worker without leaking `error_code`/axios details past the adapter._
-- [ ] **ING-7** — Plaid webhook receiver (`apps/api`): `SYNC_UPDATES_AVAILABLE` triggers a `provider-sync` job; verify webhook JWT signatures.
+- [x] **ING-7** — Plaid webhook receiver (`apps/api`): `SYNC_UPDATES_AVAILABLE` triggers a `provider-sync` job; verify webhook JWT signatures. _Needed a scoped raw-body parser (re-serializing Fastify's parsed JSON changes the bytes, so the signature hash never matches) and `FinancialProvider.parseWebhook()` (ADR-0024) to keep Plaid webhook codes out of the route._
 - [ ] **ING-8** — Scheduled fallback repeatable job (poll every 4–6h) as a webhook-miss safety net.
 - [ ] **ING-9** — Pending→posted reconciliation: soft-delete/link the pending record when its posted counterpart arrives (section 6).
 - [ ] **ING-10** — Item error-state handling: detect `ITEM_LOGIN_REQUIRED`, mark `Connection.status`, stop retrying until the user re-auths (section 6).
@@ -107,7 +107,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 - [ ] **SEC-1** — Field-level encryption for sensitive fields (account/routing numbers, raw payloads) — CSFLE or application-level AES-GCM.
 - [ ] **SEC-2** — Scheduled `mongodump` backup to encrypted, off-box storage.
-- [ ] **SEC-3** — Confirm Plaid webhook JWT signature verification is in place (cross-check against ING-7).
+- [ ] **SEC-3** — Confirm Plaid webhook JWT signature verification is in place (cross-check against ING-7). _Implemented in ING-7; still needs an end-to-end check against a real Plaid-signed webhook, since the JWK path can only be exercised against live Plaid._
 - [ ] **SEC-4** — Docker network posture audit: confirm Mongo/Redis have no host-exposed ports, only the reverse proxy does.
 - [ ] **SEC-5** — Secrets audit: confirm no credentials are baked into images, `.env` is git-excluded, and production uses Docker secrets or a mounted file.
 
