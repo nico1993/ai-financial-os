@@ -23,9 +23,19 @@ describe("UserRepository", () => {
     expect(created.email).toBe("nico@example.com");
   });
 
-  it("create never returns passwordHash (select: false)", async () => {
+  it("create never returns passwordHash", async () => {
+    // Not covered by `select: false` -- that only applies to queries, and
+    // Model.create() returns the document built from the caller's input.
+    // create() has to strip it explicitly.
     const created = await repo.create(baseInput());
     expect((created as { passwordHash?: string }).passwordHash).toBeUndefined();
+  });
+
+  it("create still persists the hash, even though it doesn't return it", async () => {
+    await repo.create(baseInput());
+
+    const withPassword = await repo.findByEmailWithPassword("nico@example.com");
+    expect(withPassword?.passwordHash).toBe(baseInput().passwordHash);
   });
 
   it("create lowercases email", async () => {
@@ -59,10 +69,10 @@ describe("UserRepository", () => {
   });
 
   it("findByEmailWithPassword returns the user with passwordHash", async () => {
-    const created = await repo.create(baseInput());
+    await repo.create(baseInput());
 
     const found = await repo.findByEmailWithPassword("nico@example.com");
-    expect(found?.passwordHash).toBe(created ? baseInput().passwordHash : undefined);
+    expect(found?.passwordHash).toBe(baseInput().passwordHash);
   });
 
   it("findById returns the user without passwordHash", async () => {

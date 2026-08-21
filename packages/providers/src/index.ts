@@ -16,5 +16,7 @@ export type {
   WebhookVerificationRequest,
 } from "./FinancialProvider.js";
 
+export { ProviderError, ProviderRateLimitError } from "./errors.js";
+
 export { createPlaidClient, type PlaidClientConfig } from "./plaid/plaidClient.js";
 export { PlaidProvider, type PlaidProviderConfig } from "./plaid/PlaidProvider.js";

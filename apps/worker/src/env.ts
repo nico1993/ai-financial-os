@@ -21,6 +21,10 @@ const envSchema = z.object({
    * is a multi-page Plaid drain, and Plaid rate-limits per Item and per
    * client (§2.2). ING-6 adds the queue-level limiter and backoff. */
   PROVIDER_SYNC_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /** Client-side rate ceiling: at most N jobs started per window, so a
+   * burst of webhooks doesn't walk straight into a Plaid 429 (§2.2). */
+  PROVIDER_SYNC_RATE_MAX: z.coerce.number().int().positive().default(5),
+  PROVIDER_SYNC_RATE_DURATION_MS: z.coerce.number().int().positive().default(1_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

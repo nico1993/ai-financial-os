@@ -14,6 +14,7 @@ import {
   type Transaction as PlaidTransaction,
 } from "plaid";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
+import { withPlaidErrorMapping } from "./plaidErrors.js";
 import type {
   ConnectionResult,
   CreateLinkTokenInput,
@@ -69,34 +70,38 @@ export class PlaidProvider implements FinancialProvider {
   ) {}
 
   async createLinkToken(input: CreateLinkTokenInput): Promise<{ linkToken: string }> {
-    const response = await this.client.linkTokenCreate({
-      user: { client_user_id: input.userId },
-      client_name: this.config.clientName,
-      products: [Products.Transactions],
-      country_codes: this.config.countryCodes ?? [CountryCode.Us],
-      language: "en",
-      webhook: this.config.webhookUrl,
-      // ADR-0002: cap initial backfill at 30 days, enforced here so no
-      // caller of this interface can request more.
-      transactions: { days_requested: 30 },
-    });
+    return withPlaidErrorMapping(async () => {
+      const response = await this.client.linkTokenCreate({
+        user: { client_user_id: input.userId },
+        client_name: this.config.clientName,
+        products: [Products.Transactions],
+        country_codes: this.config.countryCodes ?? [CountryCode.Us],
+        language: "en",
+        webhook: this.config.webhookUrl,
+        // ADR-0002: cap initial backfill at 30 days, enforced here so no
+        // caller of this interface can request more.
+        transactions: { days_requested: 30 },
+      });
 
-    return { linkToken: response.data.link_token };
+      return { linkToken: response.data.link_token };
+    });
   }
 
   async createConnection(publicToken: string): Promise<ConnectionResult> {
-    const exchange = await this.client.itemPublicTokenExchange({ public_token: publicToken });
-    const accessToken = exchange.data.access_token;
-    const providerItemId = exchange.data.item_id;
+    return withPlaidErrorMapping(async () => {
+      const exchange = await this.client.itemPublicTokenExchange({ public_token: publicToken });
+      const accessToken = exchange.data.access_token;
+      const providerItemId = exchange.data.item_id;
 
-    const institutionName = await this.resolveInstitutionName(accessToken);
+      const institutionName = await this.resolveInstitutionName(accessToken);
 
-    const accountsResponse = await this.client.accountsGet({ access_token: accessToken });
-    const accounts = accountsResponse.data.accounts.map((account) =>
-      normalizeAccount(account, institutionName),
-    );
+      const accountsResponse = await this.client.accountsGet({ access_token: accessToken });
+      const accounts = accountsResponse.data.accounts.map((account) =>
+        normalizeAccount(account, institutionName),
+      );
 
-    return { providerItemId, accessToken, institutionName, accounts };
+      return { providerItemId, accessToken, institutionName, accounts };
+    });
   }
 
   /** One page of the sync cursor — the pagination loop lives in the sync
@@ -105,28 +110,32 @@ export class PlaidProvider implements FinancialProvider {
     connection: ProviderConnectionRef,
     cursor: string | null,
   ): Promise<SyncTransactionsResult> {
-    const response = await this.client.transactionsSync({
-      access_token: connection.accessToken,
-      cursor: cursor ?? undefined,
-    });
+    return withPlaidErrorMapping(async () => {
+      const response = await this.client.transactionsSync({
+        access_token: connection.accessToken,
+        cursor: cursor ?? undefined,
+      });
 
-    return {
-      added: response.data.added.map(normalizeTransaction),
-      modified: response.data.modified.map(normalizeTransaction),
-      removed: response.data.removed.map(normalizeRemoved),
-      nextCursor: response.data.next_cursor,
-      hasMore: response.data.has_more,
-    };
+      return {
+        added: response.data.added.map(normalizeTransaction),
+        modified: response.data.modified.map(normalizeTransaction),
+        removed: response.data.removed.map(normalizeRemoved),
+        nextCursor: response.data.next_cursor,
+        hasMore: response.data.has_more,
+      };
+    });
   }
 
   async getAccounts(connection: ProviderConnectionRef): Promise<NormalizedAccount[]> {
-    const institutionName = await this.resolveInstitutionName(connection.accessToken);
-    const accountsResponse = await this.client.accountsGet({
-      access_token: connection.accessToken,
+    return withPlaidErrorMapping(async () => {
+      const institutionName = await this.resolveInstitutionName(connection.accessToken);
+      const accountsResponse = await this.client.accountsGet({
+        access_token: connection.accessToken,
+      });
+      return accountsResponse.data.accounts.map((account) =>
+        normalizeAccount(account, institutionName),
+      );
     });
-    return accountsResponse.data.accounts.map((account) =>
-      normalizeAccount(account, institutionName),
-    );
   }
 
   /** Verifies Plaid's webhook JWT (ARCHITECTURE.md §5): decode the

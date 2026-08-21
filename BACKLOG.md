@@ -59,8 +59,8 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **ING-2** — `PlaidProvider` adapter implementing `FinancialProvider`.
 - [x] **ING-3** — Plaid Link flow: public token exchange, `Connection` creation, initial `Account` fetch, 30-day backfill via `days_requested` (ADR-0002).
 - [x] **ING-4** — `provider-sync` BullMQ queue + job handler: cursor-based pagination loop, cursor persisted after each page (section 2.2).
-- [ ] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup).
-- [ ] **ING-6** — Rate limiting + retry/backoff config on the `provider-sync` queue (429 handling).
+- [x] **ING-5** — Idempotency lock per `connectionId` (Redis lock or BullMQ `jobId` dedup). _Chose `jobId` dedup via a single shared `enqueueProviderSync()` helper; see ADR-0022 for why a mutex was unnecessary, and for the `removeOnComplete` trap and the accepted mid-run-trigger limitation._
+- [x] **ING-6** — Rate limiting + retry/backoff config on the `provider-sync` queue (429 handling). _Needed a provider-neutral error taxonomy first (ADR-0023) so a Plaid 429 could reach the worker without leaking `error_code`/axios details past the adapter._
 - [ ] **ING-7** — Plaid webhook receiver (`apps/api`): `SYNC_UPDATES_AVAILABLE` triggers a `provider-sync` job; verify webhook JWT signatures.
 - [ ] **ING-8** — Scheduled fallback repeatable job (poll every 4–6h) as a webhook-miss safety net.
 - [ ] **ING-9** — Pending→posted reconciliation: soft-delete/link the pending record when its posted counterpart arrives (section 6).
