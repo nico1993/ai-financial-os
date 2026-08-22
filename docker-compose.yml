@@ -1,11 +1,15 @@
-# Docker Compose topology for self-hosted deployment (ARCHITECTURE.md §5).
+# Docker Compose topology for self-hosted deployment (ARCHITECTURE.md §5):
+# six containers (web, api, worker, mongo, redis, reverse proxy) with the
+# network posture and healthchecks §5 treats as non-negotiable.
 #
-# No app logic runs yet — apps/{web,api,worker} are still SETUP-1
-# placeholders (see BACKLOG.md). This wires the six-container shape now
-# (web, api, worker, mongo, redis, reverse proxy) with the network posture
-# and healthchecks ARCHITECTURE.md §5 treats as non-negotiable from day one,
-# so later stories add real app logic on top of a topology that's already
-# correct instead of retrofitting Docker around finished apps.
+# For local development, `docker-compose.dev.yml` publishes Mongo and Redis
+# to localhost so apps/api and apps/worker can run on the host under `tsx`
+# with a fast edit/restart loop:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongo redis
+#
+# That override is dev-only and must never be applied in production — SEC-4
+# audits exactly this.
 name: ai-financial-os
 
 services:
@@ -44,6 +48,13 @@ services:
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Overrides whatever .env holds. .env carries host-facing values so
+      # the same file works when api/worker run on the host during
+      # development; inside the compose network these must be the service
+      # names instead.
+      MONGO_URI: mongodb://mongo:27017/ai-financial-os
+      REDIS_URL: redis://redis:6379
     depends_on:
       mongo:
         condition: service_healthy
@@ -64,6 +75,11 @@ services:
       dockerfile: apps/worker/Dockerfile
     restart: unless-stopped
     env_file: .env
+    environment:
+      # See the api service above — service names inside the network,
+      # host-facing values in .env.
+      MONGO_URI: mongodb://mongo:27017/ai-financial-os
+      REDIS_URL: redis://redis:6379
     depends_on:
       mongo:
         condition: service_healthy

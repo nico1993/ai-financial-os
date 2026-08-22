@@ -1,0 +1,30 @@
+# Keeps the build context small and, more importantly, keeps secrets out
+# of the image. Both Dockerfiles do `COPY . .`, so without this entry
+# `.env` would be baked into every layer -- exactly what ARCHITECTURE.md
+# §5 forbids ("never baked into the image") and what SEC-5 audits for.
+# Secrets reach containers at run time via compose's `env_file:`, never
+# at build time.
+.env
+.env.*
+!.env.example
+
+# Never ship host node_modules into the image: they may hold
+# platform-specific binaries built for a different OS/arch than the
+# node:22-alpine base, and the image installs its own anyway.
+node_modules
+**/node_modules
+
+# Build output and caches -- regenerated inside the image.
+dist
+build
+.turbo
+coverage
+
+# Local development noise.
+.git
+.github
+.husky
+.smoke-logs
+*.log
+.DS_Store
+docker-compose.dev.yml
