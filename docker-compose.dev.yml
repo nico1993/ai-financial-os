@@ -1,0 +1,25 @@
+# Local development override. NEVER apply this in production.
+#
+# The base compose file deliberately gives Mongo and Redis no published
+# ports (ARCHITECTURE.md §5, audited by SEC-4): only the reverse proxy is
+# reachable from outside the internal network. That is right for a
+# self-hosted deployment holding real bank data, but it also means nothing
+# on the host can reach them — including apps/api and apps/worker when you
+# run them under `tsx` for a fast edit/restart loop.
+#
+# This override publishes both to 127.0.0.1 only (not 0.0.0.0), so they are
+# reachable from your machine but not from your network.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongo redis
+#   pnpm --filter @financial-os/api dev
+#   pnpm --filter @financial-os/worker dev
+
+services:
+  mongo:
+    ports:
+      - "127.0.0.1:27017:27017"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

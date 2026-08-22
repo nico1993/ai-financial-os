@@ -4,6 +4,11 @@ build/
 .turbo/
 .env
 .env.local
+# dev-setup.sh backs up your previous .env before rewriting it -- those
+# copies hold exactly the same secrets the original did.
+.env.backup.*
+# smoke-test.sh working directory: session cookie jar, response bodies.
+.smoke-logs/
 *.log
 .DS_Store
 coverage/
