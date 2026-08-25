@@ -43,10 +43,44 @@ fail() { printf "  \033[31mFAIL\033[0m  %s\n" "$1"; FAILURES=$((FAILURES + 1)); 
 skip() { printf "  \033[33mSKIP\033[0m  %s\n" "$1"; }
 stage() { printf "\n\033[1m%s\033[0m\n" "$1"; }
 
+# Kills a process AND its children. `pnpm start` forks tsx, and tsx is
+# what actually holds the port -- killing only the pnpm parent orphans the
+# child, which then survives to answer the next run's health check with
+# stale code and stale config. That is precisely how a stale API kept
+# serving REPLACE_ME credentials across runs.
+stop_tree() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  pkill -P "$pid" 2>/dev/null
+  kill "$pid" 2>/dev/null
+}
+
 cleanup() {
   stage "Cleaning up"
-  [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null && echo "  stopped api"
-  [ -n "$WORKER_PID" ] && kill "$WORKER_PID" 2>/dev/null && echo "  stopped worker"
+  stop_tree "$API_PID" && [ -n "$API_PID" ] && echo "  stopped api"
+  stop_tree "$WORKER_PID" && [ -n "$WORKER_PID" ] && echo "  stopped worker"
+
+  # Belt and braces: whatever the trap missed (an orphan, a crash before
+  # PIDs were recorded, an earlier interrupted run) gets swept by pattern
+  # and then by port. Without this a failed run leaves the next one
+  # testing a ghost.
+  pkill -f "src/index\.ts" 2>/dev/null
+  sleep 1
+  local stragglers
+  stragglers="$(lsof -ti tcp:3000 2>/dev/null | tr '\n' ' ')"
+  if [ -n "${stragglers// /}" ]; then
+    echo "  force-freeing port 3000 (pids: $stragglers)"
+    # shellcheck disable=SC2086
+    kill -9 $stragglers 2>/dev/null
+  fi
+
+  if lsof -ti tcp:3000 >/dev/null 2>&1; then
+    printf "  \033[31mport 3000 is STILL occupied\033[0m -- kill it before re-running:\n"
+    echo "    lsof -ti tcp:3000 | xargs kill -9"
+  else
+    echo "  port 3000 free"
+  fi
+
   echo "  logs kept in $LOG_DIR/ (mongo+redis left running)"
 }
 trap cleanup EXIT
@@ -86,8 +120,52 @@ pass "docker running"
 command -v pnpm >/dev/null || { fail "pnpm not on PATH"; exit 1; }
 pass "pnpm available"
 
-PLAID_ID="$(grep -E '^PLAID_CLIENT_ID=' .env | cut -d= -f2-)"
-PLAID_SECRET_VAL="$(grep -E '^PLAID_SECRET=' .env | cut -d= -f2-)"
+# Kill anything left over from an interrupted run. A stale API still bound
+# to port 3000 is genuinely dangerous here: the new one dies with
+# EADDRINUSE, the old one answers /health, and the whole suite then tests a
+# process running last run's environment. That is exactly how a run passed
+# stage 4 while the API was still using REPLACE_ME credentials.
+STRAY="$(pgrep -f "src/index\.ts" 2>/dev/null | tr '\n' ' ')"
+if [ -n "${STRAY// /}" ]; then
+  printf "  \033[33mcleanup\033[0m stopping stray api/worker from a previous run: %s\n" "$STRAY"
+  pgrep -fl "src/index\.ts" 2>/dev/null | sed 's/^/           /' | head -6
+  pkill -f "src/index\.ts" 2>/dev/null
+  sleep 2
+fi
+
+# A surviving WORKER is even nastier than a surviving API: it has no port
+# to clash on, so nothing complains -- it just quietly competes for jobs
+# and wins some of them, logging to a terminal nobody is reading. That is
+# how a drain "never happened" while actually running elsewhere.
+if pgrep -f "src/index\.ts" >/dev/null 2>&1; then
+  fail "a stray api/worker survived -- kill it and re-run"
+  pgrep -fl "src/index\.ts" | sed 's/^/       /' | head -6
+  echo "       pkill -f 'src/index.ts'"
+  exit 1
+fi
+pass "no stray api/worker processes"
+
+if lsof -ti "tcp:3000" >/dev/null 2>&1; then
+  fail "something else is still listening on port 3000 -- stop it and re-run"
+  lsof -i "tcp:3000" | sed 's/^/       /' | head -5
+  exit 1
+fi
+pass "port 3000 free"
+
+# Reads one value out of .env, tolerating the things a hand-edited file
+# picks up: a trailing CR (if it was ever touched on Windows or pasted
+# from a browser), surrounding quotes, and stray whitespace. A credential
+# with an invisible \r on the end authenticates as garbage and Plaid
+# rejects it with a message that says nothing about whitespace.
+env_value() {
+  grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- \
+    | tr -d '\r' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+PLAID_ID="$(env_value PLAID_CLIENT_ID)"
+PLAID_SECRET_VAL="$(env_value PLAID_SECRET)"
 PLAID_READY=true
 if [ -z "$PLAID_ID" ] || [ "$PLAID_ID" = "REPLACE_ME" ] ||
    [ -z "$PLAID_SECRET_VAL" ] || [ "$PLAID_SECRET_VAL" = "REPLACE_ME" ]; then
@@ -147,6 +225,17 @@ for i in $(seq 1 30); do
   printf "."; sleep 1
 done
 echo
+# Check for a port clash BEFORE trusting /health. Otherwise a surviving
+# older process answers, every later stage silently tests it instead, and
+# the failures surface much further downstream as confusing API errors.
+if grep -aq "EADDRINUSE" "$LOG_DIR/api.log" 2>/dev/null; then
+  fail "the API we started died -- port 3000 was already taken"
+  echo "       Something is answering /health, but it is NOT this run's process,"
+  echo "       so every later stage would be testing stale code and stale config."
+  echo "       Stop it with:  lsof -ti tcp:3000 | xargs kill"
+  exit 1
+fi
+
 if curl -sf "$API/health" >/dev/null 2>&1; then
   pass "GET /health"
 else
@@ -238,13 +327,29 @@ else
   # Mint a sandbox Item directly, so the whole ingestion path can run
   # without a browser. This talks to Plaid rather than to our adapter --
   # it's test scaffolding, not app code.
-  PUBLIC_TOKEN="$(curl -sS -X POST https://sandbox.plaid.com/sandbox/public_token/create \
+  PLAID_HTTP="$(curl -sS -o "$LOG_DIR/plaid-sandbox.json" -w "%{http_code}" \
+    -X POST https://sandbox.plaid.com/sandbox/public_token/create \
     -H 'Content-Type: application/json' \
     -d "{\"client_id\":\"$PLAID_ID\",\"secret\":\"$PLAID_SECRET_VAL\",\"institution_id\":\"ins_109508\",\"initial_products\":[\"transactions\"]}" \
-    | sed -n 's/.*"public_token":"\([^"]*\)".*/\1/p')"
+    2>>"$LOG_DIR/curl.err")"
+
+  # tr -d '\n' first: the extraction is line-based, so it would miss the
+  # field entirely if Plaid ever pretty-prints. The [[:space:]]* around
+  # the colon covers `"public_token": "..."` as well as the compact form.
+  PUBLIC_TOKEN="$(tr -d '\n' < "$LOG_DIR/plaid-sandbox.json" \
+    | sed -n 's/.*"public_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 
   if [ -z "$PUBLIC_TOKEN" ]; then
-    fail "could not mint a sandbox public_token -- check your Plaid keys"
+    fail "could not mint a sandbox public_token (HTTP $PLAID_HTTP)"
+    # Print what Plaid actually said. Its error bodies name the problem
+    # exactly (INVALID_API_KEYS, INVALID_FIELD, ...) and never echo the
+    # secret back, so there is nothing to redact.
+    echo "       Plaid replied:"
+    sed 's/^/         /' "$LOG_DIR/plaid-sandbox.json" | head -20
+    echo "       Keys being sent: client_id ${#PLAID_ID} chars, secret ${#PLAID_SECRET_VAL} chars"
+    echo "       (both should be 24-32 chars; a wrong length usually means a"
+    echo "        truncated paste, and INVALID_API_KEYS usually means the"
+    echo "        Production or Development secret instead of the Sandbox one)"
   else
     pass "sandbox public_token minted"
 
