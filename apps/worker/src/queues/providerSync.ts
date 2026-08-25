@@ -17,7 +17,7 @@ import {
 } from "@financial-os/providers";
 import { QUEUE_NAMES, type ProviderSyncJobData } from "@financial-os/shared";
 import { env } from "../env.js";
-import { getRedisConnection } from "../redis.js";
+import { createRedisConnection } from "../redis.js";
 import { getProviderFor } from "../provider.js";
 import { syncConnection, type SyncConnectionResult } from "../sync/syncConnection.js";
 
@@ -137,7 +137,9 @@ export function createProviderSyncWorker(): Worker<ProviderSyncJobData, SyncConn
       }
     },
     {
-      connection: getRedisConnection(),
+      // Its own connection: a Worker's blocking commands monopolize
+      // whatever client it is given (see redis.ts).
+      connection: createRedisConnection(),
       concurrency: env.PROVIDER_SYNC_CONCURRENCY,
       // Coarse client-side ceiling so a burst of webhooks doesn't walk
       // into a 429 in the first place; the handler above covers the case
@@ -156,6 +158,19 @@ export function createProviderSyncWorker(): Worker<ProviderSyncJobData, SyncConn
       `[provider-sync] job ${job?.id ?? "unknown"} failed (attempt ${job?.attemptsMade ?? 0}):`,
       err,
     );
+  });
+
+  // A worker that never consumes is otherwise indistinguishable from an
+  // idle one: no error, no output, jobs just sit in `wait`. These make the
+  // difference visible in the log.
+  worker.on("ready", () => {
+    console.info(`[provider-sync] worker ready, consuming ${QUEUE_NAMES.providerSync}`);
+  });
+  worker.on("error", (err) => {
+    console.error("[provider-sync] worker connection error:", err);
+  });
+  worker.on("active", (job) => {
+    console.info(`[provider-sync] picked up job ${job.id ?? "?"}`);
   });
 
   return worker;

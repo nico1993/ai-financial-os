@@ -14,7 +14,7 @@ export const QUEUE_NAMES = {
   providerSync: "provider-sync",
   /** ING-8's webhook-miss safety net. A separate queue from provider-sync
    * on purpose (ADR-0025): provider-sync jobs are per-connection and
-   * carry a `sync:{connectionId}` dedup id, whereas this one is a single
+   * carry a `sync-{connectionId}` dedup id, whereas this one is a single
    * repeating fan-out with no connection of its own. */
   providerSyncScheduler: "provider-sync-scheduler",
   categorizeLlm: "categorize-llm",
@@ -34,9 +34,15 @@ export interface ProviderSyncJobData {
 /** Deduplication key for the provider-sync queue (ING-5). BullMQ ignores
  * an `add` whose `jobId` matches a job it is already tracking, so a
  * webhook retry and the scheduled poll landing on the same connection
- * collapse into one drain instead of two racing on the cursor. */
+ * collapse into one drain instead of two racing on the cursor.
+ *
+ * The separator is a hyphen, NOT a colon. BullMQ rejects a custom job id
+ * containing ":" outright (`Custom Id cannot contain :`) because it uses
+ * colons as its own Redis key separator. ARCHITECTURE.md §2.2 sketches
+ * this id as `sync:${connectionId}`, which throws on every enqueue —
+ * see ADR-0022. */
 export function providerSyncJobId(connectionId: string): string {
-  return `sync:${connectionId}`;
+  return `sync-${connectionId}`;
 }
 
 /** The scheduled poll takes no payload — it derives its work list from

@@ -4,6 +4,7 @@
 // exist today (ING-4, ING-8); the rest arrive with CAT-4, XFER-2, ANLY-1.
 import { connectDb, disconnectDb } from "@financial-os/db";
 import { createProviderSyncWorker } from "./queues/providerSync.js";
+import { closeRedisConnections } from "./redis.js";
 import {
   closeSchedulerQueues,
   createProviderSyncSchedulerWorker,
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
     console.info(`[worker] ${signal} received, draining...`);
     await Promise.all(workers.map((worker) => worker.close()));
     await closeSchedulerQueues();
+    await closeRedisConnections();
     await disconnectDb();
     process.exit(0);
   };

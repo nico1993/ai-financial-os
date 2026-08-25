@@ -16,7 +16,7 @@ import {
   type ProviderSyncScheduleJobData,
 } from "@financial-os/shared";
 import { env } from "../env.js";
-import { getRedisConnection } from "../redis.js";
+import { createRedisConnection } from "../redis.js";
 
 const connections = new ConnectionRepository();
 
@@ -25,14 +25,14 @@ let schedulerQueue: Queue<ProviderSyncScheduleJobData> | undefined;
 
 function getProviderSyncQueue(): Queue<ProviderSyncJobData> {
   providerSyncQueue ??= new Queue<ProviderSyncJobData>(QUEUE_NAMES.providerSync, {
-    connection: getRedisConnection(),
+    connection: createRedisConnection(),
   });
   return providerSyncQueue;
 }
 
 function getSchedulerQueue(): Queue<ProviderSyncScheduleJobData> {
   schedulerQueue ??= new Queue<ProviderSyncScheduleJobData>(QUEUE_NAMES.providerSyncScheduler, {
-    connection: getRedisConnection(),
+    connection: createRedisConnection(),
   });
   return schedulerQueue;
 }
@@ -83,7 +83,7 @@ export function createProviderSyncSchedulerWorker(): Worker<
     // list from the database at run time.
     async () => runScheduledPoll(),
     {
-      connection: getRedisConnection(),
+      connection: createRedisConnection(),
       // One at a time: this only fans out enqueues, and overlapping runs
       // would just duplicate work the dedup key then discards.
       concurrency: 1,

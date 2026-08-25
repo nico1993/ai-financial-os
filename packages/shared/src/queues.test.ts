@@ -34,11 +34,20 @@ function fakeQueue(): { queue: ProviderSyncQueueLike; adds: RecordedAdd[]; held:
 
 describe("providerSyncJobId", () => {
   it("is derived from the connection id, so all triggers agree on it", () => {
-    expect(providerSyncJobId("conn-1")).toBe("sync:conn-1");
+    expect(providerSyncJobId("conn-1")).toBe("sync-conn-1");
   });
 
   it("differs between connections", () => {
     expect(providerSyncJobId("conn-1")).not.toBe(providerSyncJobId("conn-2"));
+  });
+
+  it("contains no colon, which BullMQ rejects outright", () => {
+    // Not a style preference: BullMQ throws `Custom Id cannot contain :`
+    // because colons are its Redis key separator. The id sketched in
+    // ARCHITECTURE.md §2.2 used one, so every enqueue threw and ING-5's
+    // dedup never ran once -- caught only by an end-to-end run, because
+    // the original version of this very test asserted the broken value.
+    expect(providerSyncJobId("507f1f77bcf86cd799439011")).not.toContain(":");
   });
 });
 
