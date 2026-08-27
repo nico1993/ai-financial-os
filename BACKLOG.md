@@ -70,7 +70,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 ## Epic: CAT — Categorization Pipeline
 
-- [ ] **CAT-1** — Tier 1 exact-match resolver (pure function): lookup against `MerchantRules` by normalized merchant string (section 2.3).
+- [x] **CAT-1** — Tier 1 exact-match resolver (pure function): lookup against `MerchantRules` by normalized merchant string (section 2.3).
 - [ ] **CAT-2** — Tier 2 regex/fuzzy resolver (pure function): priority-ordered rule evaluation + fuzzy matching against previously-corrected merchants.
 - [ ] **CAT-3** — Wire Tier 1 + Tier 2 inline into the sync job (no queue overhead).
 - [ ] **CAT-4** — `categorize-llm` BullMQ queue + job handler: batched OpenAI calls (20–50 tx/batch), structured JSON output schema, own concurrency/rate limiter.
