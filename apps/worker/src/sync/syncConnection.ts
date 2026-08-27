@@ -12,12 +12,16 @@ import {
 import type {
   AccountDocument,
   ConnectionDocument,
+  CorrectedMerchantRow,
   InsertRawPayloadInput,
+  MerchantRuleDocument,
   TransactionDocument,
   UpsertAccountInput,
   UpsertTransactionInput,
 } from "@financial-os/db";
-import { UNCATEGORIZED, toTransactionInput, utcDayStart, utcMonthStart } from "./normalize.js";
+import { isUncategorized, toTransactionInput, utcDayStart, utcMonthStart } from "./normalize.js";
+import { buildTier1Index, resolveTier1 } from "../categorize/tier1.js";
+import { resolveTier2, type Tier2RegexRule } from "../categorize/tier2.js";
 
 /** Structural slices of the real repositories — narrow on purpose, so this
  * function states exactly what it touches and tests can supply fakes
@@ -38,9 +42,20 @@ export interface SyncConnectionDeps {
     findByProviderTransactionId(providerTransactionId: string): Promise<TransactionDocument | null>;
     markRemoved(providerTransactionId: string): Promise<void>;
     updateCategory(transactionId: string, category: TransactionDocument["category"]): Promise<void>;
+    /** CAT-3's Tier 2 fuzzy-match pool (section 2.3). */
+    findCorrectedMerchants(userId: string): Promise<CorrectedMerchantRow[]>;
   };
   rawPayloads: {
     insert(input: InsertRawPayloadInput): Promise<void>;
+  };
+  /** CAT-3: a user's Tier 1/2 rules, loaded once per sync run. Full
+   * MerchantRuleDocuments in, narrowed to what the pure resolvers in
+   * ../categorize/ actually need right here -- that mapping is this
+   * module's job, not the repository's (packages/db has no business
+   * knowing a pure function's input shape). */
+  merchantRules: {
+    findExactByUser(userId: string): Promise<MerchantRuleDocument[]>;
+    findRegexByUser(userId: string): Promise<MerchantRuleDocument[]>;
   };
 }
 
@@ -72,6 +87,11 @@ export interface SyncConnectionResult {
   drainRestarts: number;
   /** True if a stale cursor forced a full resync from empty (ING-11). */
   cursorWasReset: boolean;
+  /** Newly categorized this run by Tier 1 (exact match) / Tier 2
+   * (regex/fuzzy) -- CAT-3. Whatever neither resolves stays
+   * Uncategorized/needs_review, ready for CAT-4's LLM pass. */
+  categorizedTier1: number;
+  categorizedTier2: number;
 }
 
 export class ConnectionNotFoundError extends Error {
@@ -112,6 +132,24 @@ export async function syncConnection(
   let accountIdsByProviderId = await loadAccountMap(deps, connectionId);
   let refreshedAccounts = false;
 
+  // CAT-3: Tier 1/2 rules loaded once per run, not once per transaction --
+  // same reasoning as the account cache above. A rule added mid-run by
+  // CAT-6's write-back loop (unlikely for a single-user app mid-sync) is
+  // simply picked up on the next sync.
+  const [exactRules, regexRules, correctedMerchants] = await Promise.all([
+    deps.merchantRules.findExactByUser(userId),
+    deps.merchantRules.findRegexByUser(userId),
+    deps.transactions.findCorrectedMerchants(userId),
+  ]);
+  const tier1Index = buildTier1Index(
+    exactRules.map((rule) => ({ pattern: rule.pattern, category: rule.category })),
+  );
+  const tier2RegexRules: Tier2RegexRule[] = regexRules.map((rule) => ({
+    pattern: rule.pattern,
+    category: rule.category,
+    priority: rule.priority,
+  }));
+
   /** One full pagination pass. Its accumulators are local so a restart
    * (ING-11) reports what the successful pass actually did, rather than
    * summing in the work of an abandoned one. */
@@ -129,6 +167,8 @@ export async function syncConnection(
     let added = 0;
     let modified = 0;
     let removed = 0;
+    let categorizedTier1 = 0;
+    let categorizedTier2 = 0;
     let hasMore = true;
 
     function recordBucket(date: Date): void {
@@ -156,7 +196,7 @@ export async function syncConnection(
       // document, so without this every Tier 1/2/3 result — and worse,
       // every manual Tier 4 correction the user made while it was
       // pending — is silently discarded the moment it settles.
-      if (pending.category && pending.category.value !== UNCATEGORIZED.value) {
+      if (pending.category && !isUncategorized(pending.category)) {
         await deps.transactions.updateCategory(postedId.toString(), pending.category);
       }
 
@@ -199,11 +239,29 @@ export async function syncConnection(
         return;
       }
 
-      const posted = await deps.transactions.upsertFromSync(
-        toTransactionInput(tx, { userId, accountId }),
-      );
+      const input = toTransactionInput(tx, { userId, accountId });
+      const posted = await deps.transactions.upsertFromSync(input);
       recordBucket(tx.date);
       syncedTransactionIds.push(tx.providerTransactionId);
+
+      // CAT-3: Tier 1 then Tier 2, inline, no queue overhead (section 2.3).
+      // Gated on isUncategorized() so a Plaid `modified` event never
+      // re-guesses over a category Tier 3/4 (or a manual correction) has
+      // already set -- the same $setOnInsert protection ADR-0020 gives the
+      // placeholder itself, just enforced here instead of by Mongo.
+      if (isUncategorized(posted.category)) {
+        const resolved =
+          resolveTier1(input.merchantNameNormalized, tier1Index) ??
+          resolveTier2(
+            { description: input.description, normalizedMerchant: input.merchantNameNormalized },
+            { regex: tier2RegexRules, correctedMerchants },
+          );
+        if (resolved) {
+          await deps.transactions.updateCategory(posted._id.toString(), resolved);
+          if (resolved.tier === 1) categorizedTier1 += 1;
+          else if (resolved.tier === 2) categorizedTier2 += 1;
+        }
+      }
 
       await supersedePending(tx, posted._id);
     }
@@ -251,6 +309,8 @@ export async function syncConnection(
       syncedTransactionIds,
       skippedUnknownAccount,
       pendingSuperseded,
+      categorizedTier1,
+      categorizedTier2,
     };
   }
 

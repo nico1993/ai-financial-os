@@ -32,6 +32,16 @@ export interface DateRange {
   end: Date;
 }
 
+/** Tier 2's fuzzy-match candidate shape (apps/worker/src/categorize/tier2.ts's
+ * CorrectedMerchant) -- declared independently here rather than imported,
+ * since packages/db must not depend on apps/worker (ADR-0005's repository
+ * layering runs the other direction). The two are kept structurally
+ * identical on purpose. */
+export interface CorrectedMerchantRow {
+  normalizedMerchant: string;
+  category: string;
+}
+
 export class TransactionRepository {
   /** Upserts by providerTransactionId — the mechanism that makes Plaid's
    * added/modified/removed sync events safe to apply idempotently
@@ -90,6 +100,29 @@ export class TransactionRepository {
     return TransactionModel.find({ userId, "category.status": "needs_review", isRemoved: false })
       .sort({ date: -1 })
       .lean<TransactionDocument[]>();
+  }
+
+  /** The Tier 2 fuzzy-match pool (§2.3): merchants a human has actually
+   * corrected via the Tier 4 review queue, read live from Transaction
+   * rather than from MerchantRules -- CAT-6's write-back loop seeds an
+   * exact-match MerchantRule row for the same normalized string, but this
+   * covers near-miss variants that row alone wouldn't catch. Scoped to
+   * tier 4 + confirmed: a routine Tier 1/2 auto-resolution is not "a human
+   * corrected this," and folding it in here would just dilute the fuzzy
+   * pool with matches Tier 1 already handles on its own. */
+  async findCorrectedMerchants(userId: string): Promise<CorrectedMerchantRow[]> {
+    const docs = await TransactionModel.find({
+      userId,
+      isRemoved: false,
+      "category.tier": 4,
+      "category.status": "confirmed",
+    })
+      .select("merchantNameNormalized category")
+      .lean<Pick<TransactionDocument, "merchantNameNormalized" | "category">[]>();
+    return docs.map((doc) => ({
+      normalizedMerchant: doc.merchantNameNormalized,
+      category: doc.category.value,
+    }));
   }
 
   /** Soft-deletes on a Plaid "removed" sync event — never a hard delete,

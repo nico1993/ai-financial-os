@@ -3,6 +3,7 @@ import type { NormalizedTransaction } from "@financial-os/providers";
 import type { TransactionDocument } from "@financial-os/db";
 import {
   UNCATEGORIZED,
+  isUncategorized,
   normalizeMerchantName,
   toTransactionInput,
   utcDayStart,
@@ -51,6 +52,25 @@ describe("normalizeMerchantName", () => {
     const a = normalizeMerchantName({ description: "  NETFLIX.COM  " });
     const b = normalizeMerchantName({ description: "netflix.com" });
     expect(a).toBe(b);
+  });
+});
+
+describe("isUncategorized", () => {
+  it("is true for the sync job's placeholder", () => {
+    expect(isUncategorized(UNCATEGORIZED)).toBe(true);
+  });
+
+  it("is false for a real Tier 1/2/4 category", () => {
+    expect(isUncategorized({ tier: 1, value: "Groceries", status: "confirmed" })).toBe(false);
+  });
+
+  it("is false for a needs_review category that isn't the exact placeholder", () => {
+    // e.g. a Tier 3 result flagged uncertain -- needs_review, but not
+    // "Uncategorized" and not tier 4, so CAT-3 must not treat it as still
+    // needing Tier 1/2 to run.
+    expect(
+      isUncategorized({ tier: 3, value: "Dining", confidence: 0.4, status: "needs_review" }),
+    ).toBe(false);
   });
 });
 

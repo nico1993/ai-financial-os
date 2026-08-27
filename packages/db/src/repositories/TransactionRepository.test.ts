@@ -139,6 +139,46 @@ describe("TransactionRepository", () => {
     expect(found[0]?.isRemoved).toBe(true);
   });
 
+  it("findCorrectedMerchants returns only tier-4 confirmed transactions", async () => {
+    await repo.upsertFromSync(
+      baseInput({
+        providerTransactionId: "manual-correction",
+        merchantNameNormalized: "trader joes",
+        category: { tier: 4, value: "Groceries", status: "confirmed" },
+      }),
+    );
+    await repo.upsertFromSync(
+      baseInput({
+        providerTransactionId: "auto-tier1",
+        merchantNameNormalized: "starbucks",
+        category: { tier: 1, value: "Dining", status: "confirmed" },
+      }),
+    );
+    await repo.upsertFromSync(
+      baseInput({
+        providerTransactionId: "needs-review",
+        merchantNameNormalized: "unknown biz",
+        category: { tier: 4, value: "Uncategorized", status: "needs_review" },
+      }),
+    );
+
+    const results = await repo.findCorrectedMerchants("user-1");
+    expect(results).toEqual([{ normalizedMerchant: "trader joes", category: "Groceries" }]);
+  });
+
+  it("findCorrectedMerchants excludes soft-removed transactions", async () => {
+    await repo.upsertFromSync(
+      baseInput({
+        providerTransactionId: "removed-correction",
+        merchantNameNormalized: "trader joes",
+        category: { tier: 4, value: "Groceries", status: "confirmed" },
+        isRemoved: true,
+      }),
+    );
+
+    expect(await repo.findCorrectedMerchants("user-1")).toEqual([]);
+  });
+
   it("applyTransferMatch links both sides and excludes them from cash flow", async () => {
     const a = await repo.upsertFromSync(baseInput({ providerTransactionId: "out", amount: -5000 }));
     const b = await repo.upsertFromSync(baseInput({ providerTransactionId: "in", amount: 5000 }));

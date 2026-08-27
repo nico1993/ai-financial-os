@@ -5,7 +5,13 @@ import type {
   SyncTransactionsResult,
 } from "@financial-os/providers";
 import { ProviderCursorInvalidError, ProviderSyncMutationError } from "@financial-os/providers";
-import type { AccountDocument, ConnectionDocument, TransactionDocument } from "@financial-os/db";
+import type {
+  AccountDocument,
+  ConnectionDocument,
+  CorrectedMerchantRow,
+  MerchantRuleDocument,
+  TransactionDocument,
+} from "@financial-os/db";
 import { syncConnection, type SyncConnectionDeps } from "./syncConnection.js";
 import { UNCATEGORIZED } from "./normalize.js";
 
@@ -45,6 +51,22 @@ function accountDoc(providerAccountId: string, id = `acct-${providerAccountId}`)
     createdAt: new Date(),
     updatedAt: new Date(),
   } as AccountDocument;
+}
+
+function merchantRuleDoc(overrides: Partial<MerchantRuleDocument> = {}): MerchantRuleDocument {
+  return {
+    _id: objectId("rule-1"),
+    userId: "user-1",
+    tier: 1,
+    matchType: "exact",
+    pattern: "uber",
+    category: "Transportation",
+    priority: 0,
+    source: "manual",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  } as MerchantRuleDocument;
 }
 
 function tx(overrides: Partial<NormalizedTransaction> = {}): NormalizedTransaction {
@@ -103,6 +125,19 @@ function harness(options: {
   refreshedAccounts?: NormalizedAccount[];
   existingTransactions?: Record<string, TransactionDocument>;
   syncImpl?: (cursor: string | null, index: number) => Promise<SyncTransactionsResult>;
+  /** CAT-3: a user's Tier 1/2 rules for this run. Defaults to none, so
+   * every pre-CAT-3 test keeps behaving exactly as it did -- nothing
+   * resolves, the placeholder category stands, no extra updateCategory
+   * calls appear in `calls.categoryUpdates`. */
+  exactRules?: MerchantRuleDocument[];
+  regexRules?: MerchantRuleDocument[];
+  correctedMerchants?: CorrectedMerchantRow[];
+  /** Simulates $setOnInsert: a transaction upsertFromSync() would return
+   * with a real (already-resolved) category already on it, as if this
+   * were a Plaid `modified` event on a transaction Tier 1/2/3/4 already
+   * categorized -- rather than the fresh-insert placeholder every other
+   * transaction gets back. */
+  precategorized?: Record<string, TransactionDocument["category"]>;
 }): Harness {
   const calls: Harness["calls"] = {
     syncCursors: [],
@@ -160,7 +195,11 @@ function harness(options: {
     transactions: {
       async upsertFromSync(input) {
         calls.upserted.push(input.providerTransactionId);
-        return { _id: objectId(`db-${input.providerTransactionId}`) } as TransactionDocument;
+        const category = options.precategorized?.[input.providerTransactionId] ?? input.category;
+        return {
+          _id: objectId(`db-${input.providerTransactionId}`),
+          category,
+        } as TransactionDocument;
       },
       async findByProviderTransactionId(id) {
         return options.existingTransactions?.[id] ?? null;
@@ -171,10 +210,21 @@ function harness(options: {
       async updateCategory(transactionId, category) {
         calls.categoryUpdates.push({ transactionId, value: category.value });
       },
+      async findCorrectedMerchants() {
+        return options.correctedMerchants ?? [];
+      },
     },
     rawPayloads: {
       async insert(input) {
         calls.rawPayloads.push(input.providerId);
+      },
+    },
+    merchantRules: {
+      async findExactByUser() {
+        return options.exactRules ?? [];
+      },
+      async findRegexByUser() {
+        return options.regexRules ?? [];
       },
     },
   };
@@ -646,5 +696,139 @@ describe("syncConnection — account resolution", () => {
     expect(result.skippedUnknownAccount).toEqual(["tx-orphan"]);
     // Its raw payload is still stored, so it can be replayed later (§3.1).
     expect(calls.rawPayloads).toContain("tx-orphan");
+  });
+});
+
+describe("syncConnection — CAT-3 inline categorization (§2.3)", () => {
+  it("categorizes a new transaction via Tier 1 exact match", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [
+            tx({
+              providerTransactionId: "tx-uber",
+              merchantName: "Uber",
+              description: "UBER TRIP 8QK2P",
+            }),
+          ],
+        }),
+      ],
+      exactRules: [merchantRuleDoc({ pattern: "uber", category: "Transportation" })],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([
+      { transactionId: "db-tx-uber", value: "Transportation" },
+    ]);
+    expect(result.categorizedTier1).toBe(1);
+    expect(result.categorizedTier2).toBe(0);
+  });
+
+  it("falls through to Tier 2 regex when Tier 1 misses", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({ added: [tx({ providerTransactionId: "tx-shop", description: "Corner Shop #42" })] }),
+      ],
+      regexRules: [
+        merchantRuleDoc({
+          tier: 2,
+          matchType: "regex",
+          pattern: "shop",
+          category: "Retail",
+          priority: 0,
+        }),
+      ],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([{ transactionId: "db-tx-shop", value: "Retail" }]);
+    expect(result.categorizedTier1).toBe(0);
+    expect(result.categorizedTier2).toBe(1);
+  });
+
+  it("falls through to Tier 2 fuzzy matching when nothing else resolves", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({ added: [tx({ providerTransactionId: "tx-fuzzy", description: "aaaaaaaaab" })] }),
+      ],
+      correctedMerchants: [{ normalizedMerchant: "aaaaaaaaaa", category: "Groceries" }],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([{ transactionId: "db-tx-fuzzy", value: "Groceries" }]);
+    expect(result.categorizedTier2).toBe(1);
+  });
+
+  it("prefers Tier 1 over Tier 2 when both would match", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [
+            tx({
+              providerTransactionId: "tx-both",
+              merchantName: "Uber",
+              description: "UBER TRIP",
+            }),
+          ],
+        }),
+      ],
+      exactRules: [merchantRuleDoc({ pattern: "uber", category: "Transportation (Tier 1)" })],
+      regexRules: [
+        merchantRuleDoc({
+          tier: 2,
+          matchType: "regex",
+          pattern: "uber",
+          category: "Transportation (Tier 2)",
+          priority: 0,
+        }),
+      ],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([
+      { transactionId: "db-tx-both", value: "Transportation (Tier 1)" },
+    ]);
+    expect(result.categorizedTier1).toBe(1);
+    expect(result.categorizedTier2).toBe(0);
+  });
+
+  it("leaves a transaction Uncategorized when neither tier resolves it", async () => {
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          added: [tx({ providerTransactionId: "tx-unknown", description: "Totally Unknown Biz" })],
+        }),
+      ],
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([]);
+    expect(result.categorizedTier1).toBe(0);
+    expect(result.categorizedTier2).toBe(0);
+  });
+
+  it("does not re-categorize a transaction that already has a real category", async () => {
+    // The same ADR-0020 protection the placeholder itself gets, enforced
+    // here too: a Plaid `modified` event on an already-categorized
+    // transaction must not let a fresh Tier 1/2 guess overwrite it.
+    const { deps, calls } = harness({
+      pages: [
+        page({
+          modified: [tx({ providerTransactionId: "tx-existing", description: "UBER TRIP" })],
+        }),
+      ],
+      exactRules: [merchantRuleDoc({ pattern: "uber trip", category: "Transportation" })],
+      precategorized: { "tx-existing": { tier: 4, value: "Groceries", status: "confirmed" } },
+    });
+
+    const result = await syncConnection(CONNECTION_ID, deps);
+
+    expect(calls.categoryUpdates).toEqual([]);
+    expect(result.categorizedTier1).toBe(0);
   });
 });

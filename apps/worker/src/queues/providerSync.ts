@@ -7,6 +7,7 @@ import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   AccountRepository,
   ConnectionRepository,
+  MerchantRuleRepository,
   RawPayloadRepository,
   TransactionRepository,
 } from "@financial-os/db";
@@ -25,6 +26,7 @@ const connections = new ConnectionRepository();
 const accounts = new AccountRepository();
 const transactions = new TransactionRepository();
 const rawPayloads = new RawPayloadRepository();
+const merchantRules = new MerchantRuleRepository();
 
 /** Fallback pause when the provider rate-limits us without saying for how
  * long. Long enough to actually clear a per-client limit rather than
@@ -41,6 +43,7 @@ async function runSync(connectionId: string): Promise<SyncConnectionResult> {
     accounts,
     transactions,
     rawPayloads,
+    merchantRules,
   });
 
   if (result.skippedUnknownAccount.length > 0) {
@@ -67,17 +70,17 @@ async function runSync(connectionId: string): Promise<SyncConnectionResult> {
   }
 
   console.info(
-    `[provider-sync] connection=${connectionId} pages=${result.pagesProcessed} added=${result.added} modified=${result.modified} removed=${result.removed} pendingSuperseded=${result.pendingSuperseded.length}`,
+    `[provider-sync] connection=${connectionId} pages=${result.pagesProcessed} added=${result.added} modified=${result.modified} removed=${result.removed} pendingSuperseded=${result.pendingSuperseded.length} categorizedTier1=${result.categorizedTier1} categorizedTier2=${result.categorizedTier2}`,
   );
 
-  // Two seams deliberately left unwired, each owned by a later story:
-  //   - CAT-4 enqueues categorization for result.syncedTransactionIds onto
-  //     QUEUE_NAMES.categorizeLlm, keeping ingestion throughput decoupled
-  //     from LLM latency (§2.2).
-  //   - ANLY-2 consumes result.touchedDay/MonthBuckets as the targeted
-  //     rollup recompute signal (ADR-0008).
-  // Both are returned from the job so BullMQ records them on the completed
-  // job, rather than being recomputed later from scratch.
+  // One seam deliberately left unwired, owned by a later story: CAT-4
+  // enqueues LLM categorization for whatever Tier 1/2 didn't resolve --
+  // still needs_review after this job -- onto QUEUE_NAMES.categorizeLlm,
+  // keeping ingestion throughput decoupled from LLM latency (§2.2).
+  // ANLY-2 consumes result.touchedDay/MonthBuckets as the targeted rollup
+  // recompute signal (ADR-0008). Both are returned from the job so BullMQ
+  // records them on the completed job, rather than being recomputed later
+  // from scratch.
   return result;
 }
 

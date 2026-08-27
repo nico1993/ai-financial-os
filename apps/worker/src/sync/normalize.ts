@@ -21,6 +21,19 @@ export const UNCATEGORIZED: TransactionDocument["category"] = {
   status: "needs_review",
 };
 
+/** True if `category` is still exactly the sync job's placeholder -- CAT-3's
+ * signal that Tier 1/2 (and later Tier 3) should still attempt to resolve
+ * it. Checks the full shape rather than just `value`, so this stays
+ * correct even if some future category legitimately reuses the string
+ * "Uncategorized" for an unrelated purpose. */
+export function isUncategorized(category: TransactionDocument["category"]): boolean {
+  return (
+    category.tier === UNCATEGORIZED.tier &&
+    category.value === UNCATEGORIZED.value &&
+    category.status === UNCATEGORIZED.status
+  );
+}
+
 /** The Tier 1 exact-match lookup key (§2.3). Deliberately blunt for now:
  * lowercase, and collapse every run of non-alphanumerics to a single
  * space, so "SQ *BLUE_BOTTLE  COFFEE" and "Sq Blue Bottle Coffee" resolve
