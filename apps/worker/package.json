@@ -7,6 +7,7 @@
     "build": "echo \"@financial-os/worker: no build step -- runs from source via tsx (ADR-0019)\"",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "test:categorization": "tsx src/scripts/test-categorization.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
