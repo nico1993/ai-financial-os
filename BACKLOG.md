@@ -73,11 +73,12 @@ Epics have real dependencies — this is the order that avoids building on top o
 - [x] **CAT-1** — Tier 1 exact-match resolver (pure function): lookup against `MerchantRules` by normalized merchant string (section 2.3).
 - [x] **CAT-2** — Tier 2 regex/fuzzy resolver (pure function): priority-ordered rule evaluation + fuzzy matching against previously-corrected merchants.
 - [x] **CAT-3** — Wire Tier 1 + Tier 2 inline into the sync job (no queue overhead).
-- [ ] **CAT-4** — `categorize-llm` BullMQ queue + job handler: batched OpenAI calls (20–50 tx/batch), structured JSON output schema, own concurrency/rate limiter.
-- [ ] **CAT-5** — LLM confidence threshold + `uncertain` flag handling → `needs_review` status.
+- [x] **CAT-4** — `categorize-llm` BullMQ queue + job handler: batched LLM calls (20–50 tx/batch) via a `CategorizationProvider` abstraction (ADR-0026, Ollama/`gpt-oss:20b` for Phase 1), structured JSON output schema, own concurrency limit.
+- [x] **CAT-5** — LLM confidence threshold + `uncertain` flag handling → `needs_review` status (`categorize/tier3.ts`'s `resolveTier3Outcome()`).
 - [ ] **CAT-6** — Write-back loop: cache confirmed LLM/manual decisions into the Tier 1 `MerchantRules` table.
 - [ ] **CAT-7** — Tier 4 review queue UI (`apps/web`): list `needs_review` transactions, manual category correction, triggers write-back.
-- [ ] **CAT-8** — Unit tests for the Tier 1/2 resolvers and the LLM response-parsing/confidence logic, written first.
+- [x] **CAT-8** — Unit tests for the Tier 1/2 resolvers and the LLM response-parsing/confidence logic, written first.
+- [ ] **CAT-9** — Richer/per-user category taxonomy. `DEFAULT_CATEGORIES` (`apps/worker/src/categorize/categories.ts`) is currently one fixed, app-owned list of 18 categories; running CAT-4/5 against real Plaid sandbox data (a CD deposit, a loan payment, an ambiguous employer-name credit) showed several transaction shapes with no good fit, correctly landing in `needs_review` rather than being miscategorized, but pointing at two real gaps: (1) the default list itself could use more categories/subcategories (loan payments, transfers, investments are the ones the sandbox run actually hit), and (2) categories are the same for every user with no way to add/rename/hide one. `CategorizationProvider.categorizeBatch(candidates, categories)` already takes `categories` as a plain `readonly string[]` with no opinion on its contents, so the interface doesn't need to change -- this is about where that list comes from (a DB collection per user instead of a hardcoded array) and the UI to manage it, likely alongside CAT-7's review queue.
 
 ## Epic: XFER — Transfer Matching (Cross-Account Reconciliation)
 

@@ -21,6 +21,7 @@ import { env } from "../env.js";
 import { createRedisConnection } from "../redis.js";
 import { getProviderFor } from "../provider.js";
 import { syncConnection, type SyncConnectionResult } from "../sync/syncConnection.js";
+import { triggerCategorizeLlm } from "./categorizeLlm.js";
 
 const connections = new ConnectionRepository();
 const accounts = new AccountRepository();
@@ -73,14 +74,24 @@ async function runSync(connectionId: string): Promise<SyncConnectionResult> {
     `[provider-sync] connection=${connectionId} pages=${result.pagesProcessed} added=${result.added} modified=${result.modified} removed=${result.removed} pendingSuperseded=${result.pendingSuperseded.length} categorizedTier1=${result.categorizedTier1} categorizedTier2=${result.categorizedTier2}`,
   );
 
-  // One seam deliberately left unwired, owned by a later story: CAT-4
-  // enqueues LLM categorization for whatever Tier 1/2 didn't resolve --
-  // still needs_review after this job -- onto QUEUE_NAMES.categorizeLlm,
-  // keeping ingestion throughput decoupled from LLM latency (§2.2).
-  // ANLY-2 consumes result.touchedDay/MonthBuckets as the targeted rollup
-  // recompute signal (ADR-0008). Both are returned from the job so BullMQ
-  // records them on the completed job, rather than being recomputed later
-  // from scratch.
+  // CAT-4: hand off to the categorize-llm queue (§2.3, ADR-0026) whenever
+  // this run touched any transaction, not only when Tier 1/2 left some
+  // uncategorized -- a connection whose transactions were all resolved
+  // inline this run might still have older needs_review rows from before
+  // Tier 1/2 existed, or from a previous low-confidence Tier 3 attempt,
+  // and this is what sweeps those up too (categorizeLlm.ts's job derives
+  // its own work list from the database, not from this run's results).
+  // Keeps ingestion throughput decoupled from LLM latency, same reasoning
+  // as ADR-0025 gives the scheduled poll its own queue.
+  if (result.syncedTransactionIds.length > 0) {
+    await triggerCategorizeLlm(connection.userId);
+  }
+
+  // One seam deliberately left unwired, owned by a later story: ANLY-2
+  // consumes result.touchedDay/MonthBuckets as the targeted rollup
+  // recompute signal (ADR-0008). Returned from the job so BullMQ records
+  // it on the completed job, rather than being recomputed later from
+  // scratch.
   return result;
 }
 

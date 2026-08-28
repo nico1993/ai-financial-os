@@ -3,7 +3,13 @@
 //
 // Resolved per Connection.provider so a second adapter (ADR-0004) becomes
 // another case here rather than a change inside the sync job.
-import { createPlaidClient, PlaidProvider, type FinancialProvider } from "@financial-os/providers";
+import {
+  createPlaidClient,
+  PlaidProvider,
+  OllamaCategorizationProvider,
+  type FinancialProvider,
+  type CategorizationProvider,
+} from "@financial-os/providers";
 import type { ConnectionDocument } from "@financial-os/db";
 import { env } from "./env.js";
 
@@ -35,4 +41,24 @@ export function getProviderFor(provider: ConnectionDocument["provider"]): Financ
       throw new Error(`No adapter registered for provider: ${String(unreachable)}`);
     }
   }
+}
+
+let categorizationProvider: CategorizationProvider | undefined;
+
+/** CAT-4's counterpart to getProviderFor() (ADR-0026). Unlike financial
+ * providers, there's no per-record dimension to switch on here -- every
+ * categorize-llm job talks to the same backend, so this is a plain
+ * singleton rather than a lookup keyed on something like
+ * Connection.provider. Still returns the CategorizationProvider
+ * interface, not OllamaCategorizationProvider directly: swapping the
+ * backend later (a different local model, a hosted API) means changing
+ * what gets constructed here, not touching queues/categorizeLlm.ts. */
+export function getCategorizationProvider(): CategorizationProvider {
+  if (!categorizationProvider) {
+    categorizationProvider = new OllamaCategorizationProvider({
+      host: env.OLLAMA_HOST,
+      model: env.OLLAMA_MODEL,
+    });
+  }
+  return categorizationProvider;
 }

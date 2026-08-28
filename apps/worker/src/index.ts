@@ -1,7 +1,8 @@
 // @financial-os/worker
 // Plain Node/TS process — BullMQ queues: provider-sync, categorize-llm,
-// transfer-matching, rollups. provider-sync and its fallback scheduler
-// exist today (ING-4, ING-8); the rest arrive with CAT-4, XFER-2, ANLY-1.
+// transfer-matching, rollups. provider-sync/its fallback scheduler and
+// categorize-llm exist today (ING-4, ING-8, CAT-4); the rest arrive with
+// XFER-2, ANLY-1.
 import { connectDb, disconnectDb } from "@financial-os/db";
 import { createProviderSyncWorker } from "./queues/providerSync.js";
 import { closeRedisConnections } from "./redis.js";
@@ -10,12 +11,17 @@ import {
   createProviderSyncSchedulerWorker,
   registerProviderSyncSchedule,
 } from "./queues/providerSyncScheduler.js";
+import { closeCategorizeLlmQueue, createCategorizeLlmWorker } from "./queues/categorizeLlm.js";
 import { env } from "./env.js";
 
 async function main(): Promise<void> {
   await connectDb({ uri: env.MONGO_URI });
 
-  const workers = [createProviderSyncWorker(), createProviderSyncSchedulerWorker()];
+  const workers = [
+    createProviderSyncWorker(),
+    createProviderSyncSchedulerWorker(),
+    createCategorizeLlmWorker(),
+  ];
 
   // Idempotent by scheduler id, so restarts update the existing schedule
   // rather than stacking duplicates.
@@ -30,6 +36,7 @@ async function main(): Promise<void> {
     console.info(`[worker] ${signal} received, draining...`);
     await Promise.all(workers.map((worker) => worker.close()));
     await closeSchedulerQueues();
+    await closeCategorizeLlmQueue();
     await closeRedisConnections();
     await disconnectDb();
     process.exit(0);

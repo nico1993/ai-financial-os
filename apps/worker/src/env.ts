@@ -47,6 +47,36 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(4 * 60 * 60 * 1_000),
+
+  // --- Tier 3 categorization (CAT-4, ARCHITECTURE.md §2.3, ADR-0026) ---
+  /** Ollama's base URL. Ollama itself is not a Docker Compose service
+   * (ADR-0026 -- local inference wants direct GPU/unified-memory access a
+   * Linux container on macOS can't give it), so this needs overriding per
+   * environment: "http://localhost:11434" when apps/worker runs on the
+   * host, "http://host.docker.internal:11434" inside the compose network
+   * (see docker-compose.yml's worker service). No API key -- Ollama has
+   * none to configure. */
+  OLLAMA_HOST: z.string().min(1).default("http://localhost:11434"),
+  /** Swappable by design (the whole point of CategorizationProvider) --
+   * gpt-oss:20b is Phase 1's pick, not a hardcoded assumption anywhere
+   * else in the code. */
+  OLLAMA_MODEL: z.string().min(1).default("gpt-oss:20b"),
+  /** Transactions per categorizeBatch() call. ARCHITECTURE.md §2.3
+   * suggests 20-50 to minimize per-call overhead; 30 is a starting point
+   * in that range, not a measured constant. */
+  CATEGORIZE_LLM_BATCH_SIZE: z.coerce.number().int().positive().default(30),
+  /** CAT-5's confirmed/needs_review split (categorize/tier3.ts) --
+   * inclusive, so a result exactly at the threshold confirms. 0.7 is a
+   * starting point, easy to tune once real gpt-oss:20b output is seen
+   * against real transactions. */
+  CATEGORIZE_LLM_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.7),
+  /** How many categorizeBatch() calls run at once. Deliberately low --
+   * unlike PROVIDER_SYNC_CONCURRENCY, which is bounded by Plaid's network
+   * rate limits, this is bounded by one Mac's GPU/unified memory: running
+   * two gpt-oss:20b batches at once contends for the same hardware rather
+   * than actually parallelizing, so the default is 1 (serialize) rather
+   * than optimistically higher. */
+  CATEGORIZE_LLM_CONCURRENCY: z.coerce.number().int().positive().default(1),
 });
 
 export type Env = z.infer<typeof envSchema>;

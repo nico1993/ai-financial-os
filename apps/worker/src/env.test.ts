@@ -57,4 +57,54 @@ describe("loadEnv", () => {
       /PROVIDER_SYNC_CONCURRENCY/,
     );
   });
+
+  it("defaults Ollama config to a host dev setup with no API key required", () => {
+    const env = loadEnv(baseEnv());
+    expect(env.OLLAMA_HOST).toBe("http://localhost:11434");
+    expect(env.OLLAMA_MODEL).toBe("gpt-oss:20b");
+  });
+
+  it("lets OLLAMA_HOST be overridden for the Docker Compose network", () => {
+    const env = loadEnv(baseEnv({ OLLAMA_HOST: "http://host.docker.internal:11434" }));
+    expect(env.OLLAMA_HOST).toBe("http://host.docker.internal:11434");
+  });
+
+  it("lets OLLAMA_MODEL be swapped without any other config change", () => {
+    // The whole point of CategorizationProvider (ADR-0026): picking a
+    // different model is a one-var change, not a code change.
+    const env = loadEnv(baseEnv({ OLLAMA_MODEL: "llama3.1:70b" }));
+    expect(env.OLLAMA_MODEL).toBe("llama3.1:70b");
+  });
+
+  it("defaults the categorize-llm batch size, confidence threshold, and concurrency", () => {
+    const env = loadEnv(baseEnv());
+    expect(env.CATEGORIZE_LLM_BATCH_SIZE).toBe(30);
+    expect(env.CATEGORIZE_LLM_CONFIDENCE_THRESHOLD).toBe(0.7);
+    expect(env.CATEGORIZE_LLM_CONCURRENCY).toBe(1);
+  });
+
+  it("coerces the categorize-llm numeric knobs from their string forms", () => {
+    const env = loadEnv(
+      baseEnv({
+        CATEGORIZE_LLM_BATCH_SIZE: "50",
+        CATEGORIZE_LLM_CONFIDENCE_THRESHOLD: "0.85",
+        CATEGORIZE_LLM_CONCURRENCY: "2",
+      }),
+    );
+    expect(env.CATEGORIZE_LLM_BATCH_SIZE).toBe(50);
+    expect(env.CATEGORIZE_LLM_CONFIDENCE_THRESHOLD).toBe(0.85);
+    expect(env.CATEGORIZE_LLM_CONCURRENCY).toBe(2);
+  });
+
+  it("rejects a confidence threshold outside 0..1", () => {
+    expect(() => loadEnv(baseEnv({ CATEGORIZE_LLM_CONFIDENCE_THRESHOLD: "1.5" }))).toThrow(
+      /CATEGORIZE_LLM_CONFIDENCE_THRESHOLD/,
+    );
+  });
+
+  it("rejects a non-positive categorize-llm batch size", () => {
+    expect(() => loadEnv(baseEnv({ CATEGORIZE_LLM_BATCH_SIZE: "0" }))).toThrow(
+      /CATEGORIZE_LLM_BATCH_SIZE/,
+    );
+  });
 });
