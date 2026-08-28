@@ -80,6 +80,18 @@ services:
       # host-facing values in .env.
       MONGO_URI: mongodb://mongo:27017/ai-financial-os
       REDIS_URL: redis://redis:6379
+      # Ollama runs natively on the host, not as a compose service
+      # (ADR-0026 — local LLM inference wants direct GPU/unified-memory
+      # access a Linux container on macOS can't give it). .env's
+      # OLLAMA_HOST defaults to localhost:11434 for host-side `tsx` dev;
+      # inside this network "localhost" would mean the container itself,
+      # so it's overridden the same way MONGO_URI/REDIS_URL are above.
+      OLLAMA_HOST: http://host.docker.internal:11434
+    # host.docker.internal only resolves on Docker Desktop (mac/Windows)
+    # without this; harmless there, required for Linux-host portability
+    # (Docker Desktop ignores it since it already provides the mapping).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mongo:
         condition: service_healthy
