@@ -20,6 +20,7 @@ export type UpsertTransactionInput = Pick<
       | "pendingTransactionId"
       | "authorizedDate"
       | "merchantName"
+      | "providerCategory"
       | "transferGroupId"
       | "excludeFromCashFlow"
       | "pending"
@@ -144,5 +145,31 @@ export class TransactionRepository {
       { _id: { $in: transactionIds } },
       { $set: { transferGroupId, excludeFromCashFlow: true } },
     );
+  }
+
+  /** The transfer-matching pass's full candidate pool for a user (§2.4,
+   * XFER-1/XFER-2, ADR-0029): every settled, non-removed transaction not
+   * already linked to a transferGroupId. Deliberately NOT filtered by
+   * providerCategory here -- matching.ts's findTransferMatches() needs the
+   * full pool, since §2.4 only requires *one* side of a matched pair to
+   * carry a TRANSFER_-prefixed/payment-type signal, and the counterpart can be an
+   * ordinary transaction with no provider category signal at all.
+   * Excludes `pending: true`: a pending transaction's amount/date can
+   * still change, and syncConnection.ts's supersedePending() does not
+   * carry transferGroupId/excludeFromCashFlow across to the posted
+   * replacement the way it carries `category` -- matching a pending row
+   * would risk an orphaned link once it settles under a new document.
+   * Full-history scan, no date windowing: an accepted Phase 1
+   * simplification for this app's self-hosted, single-user scale
+   * (ADR-0029) -- revisit if a real history ever makes this slow. */
+  async findUnmatchedTransferCandidates(userId: string): Promise<TransactionDocument[]> {
+    return TransactionModel.find({
+      userId,
+      isRemoved: false,
+      pending: false,
+      transferGroupId: { $exists: false },
+    })
+      .sort({ date: -1 })
+      .lean<TransactionDocument[]>();
   }
 }

@@ -3,18 +3,25 @@ import {
   CATEGORIZE_LLM_ATTEMPTS,
   PROVIDER_SYNC_ATTEMPTS,
   QUEUE_NAMES,
+  TRANSFER_MATCHING_ATTEMPTS,
   categorizeLlmJobId,
   categorizeLlmJobOptions,
   enqueueCategorizeLlm,
   enqueueProviderSync,
+  enqueueTransferMatching,
   providerSyncJobId,
   providerSyncJobOptions,
+  transferMatchingJobId,
+  transferMatchingJobOptions,
   type CategorizeLlmJobData,
   type CategorizeLlmJobOptions,
   type CategorizeLlmQueueLike,
   type ProviderSyncJobData,
   type ProviderSyncJobOptions,
   type ProviderSyncQueueLike,
+  type TransferMatchingJobData,
+  type TransferMatchingJobOptions,
+  type TransferMatchingQueueLike,
 } from "./queues.js";
 
 interface RecordedAdd {
@@ -228,6 +235,115 @@ describe("enqueueCategorizeLlm", () => {
     await enqueueCategorizeLlm(queue, "user-1");
     held.delete(categorizeLlmJobId("user-1")); // job completed, removeOnComplete fired
     await enqueueCategorizeLlm(queue, "user-1");
+
+    expect(adds).toHaveLength(2);
+  });
+});
+
+interface RecordedTransferMatchingAdd {
+  name: string;
+  data: TransferMatchingJobData;
+  opts: TransferMatchingJobOptions;
+}
+
+/** Same dedup mimicry as fakeQueue()/fakeCategorizeQueue(), for the
+ * transfer-matching queue. */
+function fakeTransferMatchingQueue(): {
+  queue: TransferMatchingQueueLike;
+  adds: RecordedTransferMatchingAdd[];
+  held: Set<string>;
+} {
+  const adds: RecordedTransferMatchingAdd[] = [];
+  const held = new Set<string>();
+  const queue: TransferMatchingQueueLike = {
+    async add(name, data, opts) {
+      if (held.has(opts.jobId)) return { id: opts.jobId };
+      held.add(opts.jobId);
+      adds.push({ name, data, opts });
+      return { id: opts.jobId };
+    },
+  };
+  return { queue, adds, held };
+}
+
+describe("transferMatchingJobId", () => {
+  it("is derived from the user id, so all triggers agree on it", () => {
+    expect(transferMatchingJobId("user-1")).toBe("transfer-match-user-1");
+  });
+
+  it("differs between users", () => {
+    expect(transferMatchingJobId("user-1")).not.toBe(transferMatchingJobId("user-2"));
+  });
+
+  it("contains no colon, which BullMQ rejects outright", () => {
+    // Same BullMQ constraint providerSyncJobId/categorizeLlmJobId guard
+    // against (ADR-0022): a custom job id containing ":" throws at
+    // enqueue time.
+    expect(transferMatchingJobId("507f1f77bcf86cd799439011")).not.toContain(":");
+  });
+});
+
+describe("transferMatchingJobOptions", () => {
+  it("carries the dedup jobId", () => {
+    expect(transferMatchingJobOptions("user-1").jobId).toBe("transfer-match-user-1");
+  });
+
+  it("removes finished jobs so the dedup key frees up again", () => {
+    // Same load-bearing reason as categorizeLlmJobOptions'/
+    // providerSyncJobOptions' (ADR-0022): retaining a finished job under
+    // this user's id would block every later transfer-matching enqueue.
+    const opts = transferMatchingJobOptions("user-1");
+    expect(opts.removeOnComplete).toBe(true);
+    expect(opts.removeOnFail).toBe(true);
+  });
+
+  it("retries with exponential backoff, same attempts as categorize-llm", () => {
+    const opts = transferMatchingJobOptions("user-1");
+    expect(opts.attempts).toBe(TRANSFER_MATCHING_ATTEMPTS);
+    expect(opts.attempts).toBe(CATEGORIZE_LLM_ATTEMPTS);
+    expect(opts.backoff.type).toBe("exponential");
+    expect(opts.backoff.delay).toBeGreaterThan(0);
+  });
+});
+
+describe("enqueueTransferMatching", () => {
+  it("enqueues onto the transfer-matching queue with the user id as payload", async () => {
+    const { queue, adds } = fakeTransferMatchingQueue();
+
+    await enqueueTransferMatching(queue, "user-1");
+
+    expect(adds).toHaveLength(1);
+    expect(adds[0]?.name).toBe(QUEUE_NAMES.transferMatching);
+    expect(adds[0]?.data).toEqual({ userId: "user-1" });
+  });
+
+  it("collapses repeat triggers for the same user into one job", async () => {
+    const { queue, adds } = fakeTransferMatchingQueue();
+
+    // Several categorize-llm runs finishing back-to-back for the same
+    // user before this queue catches up.
+    await enqueueTransferMatching(queue, "user-1");
+    await enqueueTransferMatching(queue, "user-1");
+    await enqueueTransferMatching(queue, "user-1");
+
+    expect(adds).toHaveLength(1);
+  });
+
+  it("does not collapse triggers for different users", async () => {
+    const { queue, adds } = fakeTransferMatchingQueue();
+
+    await enqueueTransferMatching(queue, "user-1");
+    await enqueueTransferMatching(queue, "user-2");
+
+    expect(adds.map((add) => add.data.userId)).toEqual(["user-1", "user-2"]);
+  });
+
+  it("enqueues again once the previous job has been removed", async () => {
+    const { queue, adds, held } = fakeTransferMatchingQueue();
+
+    await enqueueTransferMatching(queue, "user-1");
+    held.delete(transferMatchingJobId("user-1")); // job completed, removeOnComplete fired
+    await enqueueTransferMatching(queue, "user-1");
 
     expect(adds).toHaveLength(2);
   });

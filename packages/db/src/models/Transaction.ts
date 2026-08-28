@@ -34,6 +34,16 @@ export interface TransactionDocument {
   merchantNameNormalized: string;
   /** Raw description, for fuzzy/regex matching (Tier 2). */
   description: string;
+  /** Provider's own raw category signal (e.g. Plaid's
+   * personal_finance_category.detailed), unparsed by this layer on
+   * purpose -- packages/providers/src/FinancialProvider.ts's
+   * NormalizedTransaction.providerCategory already documented this intent
+   * before anything consumed it; ADR-0029 wires it through. Distinct from
+   * `category` below, which is the app's own CAT-9 taxonomy value decided
+   * by Tier 1-4 -- this is the provider's signal, set once at sync time
+   * and refreshed on every resync like any other provider-owned field
+   * (never $setOnInsert like `category` is). */
+  providerCategory?: string;
   category: TransactionCategory;
   /** Set by the transfer-matching pass (§2.4); links both sides. */
   transferGroupId?: string;
@@ -69,6 +79,7 @@ const transactionSchema = new Schema<TransactionDocument>(
     merchantName: { type: String },
     merchantNameNormalized: { type: String, required: true },
     description: { type: String, required: true },
+    providerCategory: { type: String },
     category: { type: categorySchema, required: true },
     transferGroupId: { type: String },
     excludeFromCashFlow: { type: Boolean, required: true, default: false },

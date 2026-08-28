@@ -194,4 +194,35 @@ describe("TransactionRepository", () => {
       expect(txn.excludeFromCashFlow).toBe(true);
     }
   });
+
+  it("upsertFromSync stores providerCategory and refreshes it on resync -- provider-owned, not app-owned like category", async () => {
+    const created = await repo.upsertFromSync(
+      baseInput({ providerCategory: "TRANSFER_OUT_ACCOUNT_TRANSFER" }),
+    );
+    expect(created.providerCategory).toBe("TRANSFER_OUT_ACCOUNT_TRANSFER");
+
+    const updated = await repo.upsertFromSync(
+      baseInput({ providerCategory: "TRANSFER_OUT_SAVINGS" }),
+    );
+    expect(updated.providerCategory).toBe("TRANSFER_OUT_SAVINGS");
+  });
+
+  it("findUnmatchedTransferCandidates returns non-removed, settled, not-yet-grouped transactions", async () => {
+    await repo.upsertFromSync(baseInput({ providerTransactionId: "eligible" }));
+    await repo.upsertFromSync(baseInput({ providerTransactionId: "removed-one", isRemoved: true }));
+    await repo.upsertFromSync(baseInput({ providerTransactionId: "pending-one", pending: true }));
+    const grouped = await repo.upsertFromSync(baseInput({ providerTransactionId: "grouped-one" }));
+    await repo.applyTransferMatch([grouped._id.toString()], "group-existing");
+
+    const results = await repo.findUnmatchedTransferCandidates("user-1");
+    expect(results.map((tx) => tx.providerTransactionId)).toEqual(["eligible"]);
+  });
+
+  it("findUnmatchedTransferCandidates is scoped to the requesting user", async () => {
+    await repo.upsertFromSync(baseInput({ providerTransactionId: "mine", userId: "user-1" }));
+    await repo.upsertFromSync(baseInput({ providerTransactionId: "theirs", userId: "user-2" }));
+
+    const results = await repo.findUnmatchedTransferCandidates("user-1");
+    expect(results.map((tx) => tx.providerTransactionId)).toEqual(["mine"]);
+  });
 });

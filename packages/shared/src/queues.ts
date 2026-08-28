@@ -206,3 +206,75 @@ export async function enqueueCategorizeLlm(
 ): Promise<void> {
   await queue.add(QUEUE_NAMES.categorizeLlm, { userId }, categorizeLlmJobOptions(userId));
 }
+
+/** Dedup key for the transfer-matching queue (XFER-2), mirroring
+ * categorizeLlmJobId/providerSyncJobId: several categorize-llm runs
+ * finishing back-to-back for the same user collapse onto one queued
+ * transfer-matching job instead of stacking duplicates that would all
+ * scan the same unmatched pool. Same hyphen separator, same reason
+ * (ADR-0022) -- BullMQ rejects a custom job id containing ":". */
+export function transferMatchingJobId(userId: string): string {
+  return `transfer-match-${userId}`;
+}
+
+/** Just the user id (mirrors CategorizeLlmJobData, ADR-0025's "work list
+ * from the database" principle): the job loads its own unmatched pool via
+ * TransactionRepository.findUnmatchedTransferCandidates() at run time
+ * rather than being handed a transaction list at enqueue time. */
+export interface TransferMatchingJobData {
+  userId: string;
+}
+
+export interface TransferMatchingJobOptions {
+  jobId: string;
+  attempts: number;
+  backoff: { type: "exponential"; delay: number };
+  removeOnComplete: boolean;
+  removeOnFail: boolean;
+}
+
+/** Same attempts/backoff as categorize-llm's: both are pure-DB jobs with
+ * no external provider quota to wait out, so there's no reason for this
+ * one to retry differently. */
+export const TRANSFER_MATCHING_ATTEMPTS = CATEGORIZE_LLM_ATTEMPTS;
+export const TRANSFER_MATCHING_BACKOFF_MS = CATEGORIZE_LLM_BACKOFF_MS;
+
+/**
+ * Job options for every transfer-matching enqueue. `removeOnComplete` /
+ * `removeOnFail` are both `true` for the same load-bearing reason as
+ * categorize-llm's and provider-sync's (ADR-0022): retaining a finished
+ * job under this user's dedup key would permanently block their next
+ * transfer-matching enqueue.
+ */
+export function transferMatchingJobOptions(userId: string): TransferMatchingJobOptions {
+  return {
+    jobId: transferMatchingJobId(userId),
+    attempts: TRANSFER_MATCHING_ATTEMPTS,
+    backoff: { type: "exponential", delay: TRANSFER_MATCHING_BACKOFF_MS },
+    removeOnComplete: true,
+    removeOnFail: true,
+  };
+}
+
+/** The slice of BullMQ's `Queue` this package needs -- keeps the enqueue
+ * helper testable and bullmq out of packages/shared's dependencies. */
+export interface TransferMatchingQueueLike {
+  add(
+    name: string,
+    data: TransferMatchingJobData,
+    opts: TransferMatchingJobOptions,
+  ): Promise<{ id?: string | null } | null>;
+}
+
+/**
+ * The single supported way to request a transfer-matching pass for a user
+ * (XFER-2). categorize-llm's job calls this once its own run completes,
+ * the same discipline enqueueCategorizeLlm() enforces for categorize-llm,
+ * so nothing can accidentally skip the dedup key.
+ */
+export async function enqueueTransferMatching(
+  queue: TransferMatchingQueueLike,
+  userId: string,
+): Promise<void> {
+  await queue.add(QUEUE_NAMES.transferMatching, { userId }, transferMatchingJobOptions(userId));
+}
