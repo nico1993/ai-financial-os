@@ -1,9 +1,21 @@
 // MerchantRuleRepository — every persistence operation on MerchantRule goes
-// through here (ADR-0005). Read-only for now: CAT-3 needs to load a user's
-// Tier 1/2 rules to categorize inline during sync. The write side (CAT-6's
-// write-back loop, seeding Tier 1 rows from confirmed LLM/manual decisions)
-// is added when that story is built.
-import { MerchantRuleModel, type MerchantRuleDocument } from "../models/MerchantRule.js";
+// through here (ADR-0005, ADR-0027). CAT-3's read side loads a user's Tier
+// 1/2 rules to categorize inline during sync; upsertExact() is CAT-6's
+// write-back side, seeding Tier 1 rows from confirmed LLM decisions today
+// (apps/worker/src/queues/categorizeLlm.ts) and from manual Tier 4
+// corrections once CAT-7 exists.
+import {
+  MerchantRuleModel,
+  type MerchantRuleDocument,
+  type MerchantRuleSource,
+} from "../models/MerchantRule.js";
+
+export interface MerchantRuleWriteBack {
+  userId: string;
+  pattern: string;
+  category: string;
+  source: MerchantRuleSource;
+}
 
 export class MerchantRuleRepository {
   /** Tier 1's exact-match lookup table for one user (§2.3). Returns full
@@ -21,5 +33,34 @@ export class MerchantRuleRepository {
    * order this returns. */
   async findRegexByUser(userId: string): Promise<MerchantRuleDocument[]> {
     return MerchantRuleModel.find({ userId, matchType: "regex" }).lean<MerchantRuleDocument[]>();
+  }
+
+  /** CAT-6's write-back: idempotent upsert on the (userId, pattern) exact-
+   * match key -- the same unique partial index (matchType: 'exact') Tier
+   * 1's lookup relies on. On conflict, last write wins on category/source
+   * (tier1.ts's buildTier1Index() already documents this rules table as
+   * advisory data, not something that should refuse a write); a future
+   * manual correction (CAT-7) calling this with source: "manual" is
+   * expected to overwrite an "llm" row here, since a human's decision
+   * should win over the model's. In the normal flow this rarely conflicts
+   * at all -- a merchant with an existing Tier 1 rule is resolved by Tier
+   * 1 during sync and never reaches Tier 3 to begin with; the realistic
+   * case is two transactions for the same not-yet-ruled merchant both
+   * confirming in the same categorize-llm run. */
+  async upsertExact(rule: MerchantRuleWriteBack): Promise<void> {
+    await MerchantRuleModel.updateOne(
+      { userId: rule.userId, pattern: rule.pattern, matchType: "exact" },
+      {
+        $set: { category: rule.category, source: rule.source },
+        $setOnInsert: {
+          userId: rule.userId,
+          tier: 1,
+          matchType: "exact",
+          pattern: rule.pattern,
+          priority: 0,
+        },
+      },
+      { upsert: true, setDefaultsOnInsert: true },
+    );
   }
 }

@@ -5,3 +5,4 @@ export * from "./TransactionRepository.js";
 export * from "./RawPayloadRepository.js";
 export * from "./MerchantRuleRepository.js";
 export * from "./RollupRepository.js";
+export * from "./CategoryRepository.js";

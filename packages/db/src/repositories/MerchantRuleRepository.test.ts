@@ -64,4 +64,68 @@ describe("MerchantRuleRepository", () => {
       /duplicate key|E11000/,
     );
   });
+
+  describe("upsertExact", () => {
+    it("inserts a new Tier 1 rule when none exists for this (userId, pattern)", async () => {
+      await repo.upsertExact({
+        userId: "user-1",
+        pattern: "uber",
+        category: "Transportation",
+        source: "llm",
+      });
+
+      const results = await repo.findExactByUser("user-1");
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        tier: 1,
+        matchType: "exact",
+        pattern: "uber",
+        category: "Transportation",
+        priority: 0,
+        source: "llm",
+      });
+    });
+
+    it("overwrites the category/source of an existing rule for the same (userId, pattern)", async () => {
+      await MerchantRuleModel.create(rule({ category: "Transportation", source: "manual" }));
+
+      await repo.upsertExact({
+        userId: "user-1",
+        pattern: "uber",
+        category: "Rideshare",
+        source: "llm",
+      });
+
+      const results = await repo.findExactByUser("user-1");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.category).toBe("Rideshare");
+      expect(results[0]?.source).toBe("llm");
+    });
+
+    it("is scoped per user -- writing back for one user doesn't touch another's rule", async () => {
+      await MerchantRuleModel.create(rule({ userId: "user-2", category: "Groceries" }));
+
+      await repo.upsertExact({
+        userId: "user-1",
+        pattern: "uber",
+        category: "Transportation",
+        source: "llm",
+      });
+
+      const otherUser = await repo.findExactByUser("user-2");
+      expect(otherUser).toHaveLength(1);
+      expect(otherUser[0]?.category).toBe("Groceries");
+    });
+
+    it("never creates a Tier 2 (regex) row -- upsertExact is exact-match only", async () => {
+      await repo.upsertExact({
+        userId: "user-1",
+        pattern: "uber",
+        category: "Transportation",
+        source: "llm",
+      });
+
+      expect(await repo.findRegexByUser("user-1")).toHaveLength(0);
+    });
+  });
 });

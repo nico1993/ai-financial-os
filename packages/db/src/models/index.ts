@@ -7,3 +7,4 @@ export * from "./MerchantRule.js";
 export * from "./DailyBalanceSnapshot.js";
 export * from "./MonthlyRollup.js";
 export * from "./Subscription.js";
+export * from "./Category.js";
