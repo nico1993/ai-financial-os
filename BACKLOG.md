@@ -13,7 +13,7 @@ Epics have real dependencies — this is the order that avoids building on top o
 3. **AUTH** — `apps/api` needs a real "current user" per request before any route (starting with ING-3's Link routes) can be written correctly (ADR-0018).
 4. **ING** — ingestion needs DATA's schemas to write into, and AUTH's `requireAuth` to know whose data it's writing.
 5. **CAT** — categorization needs ING's transactions to categorize.
-6. **XFER** — transfer matching needs CAT's category signals (`TRANSFER_*`) to find candidates.
+6. **XFER** — transfer matching needs CAT's category signals (`TRANSFER_*`) to find candidates. _Correction (ADR-0029): the actual signal is `Transaction.providerCategory`, Plaid's raw field set at sync time -- not any CAT-9 taxonomy value. XFER-2 still chains off categorize-llm's completion to keep the documented pipeline order, not because matching needs Tier 1-4's output._
 7. **ANLY** — dashboards need ING + CAT + XFER's data to be meaningful (cash flow needs `excludeFromCashFlow` from XFER, categories from CAT, transactions from ING).
 8. **SEC** — baseline network/secrets posture belongs in SETUP; the items listed under SEC here are the ones worth deferring slightly (encryption at rest, backups) since they don't block functional development, but shouldn't slip past Phase 1 sign-off.
 
@@ -83,12 +83,12 @@ Epics have real dependencies — this is the order that avoids building on top o
 
 ## Epic: XFER — Transfer Matching (Cross-Account Reconciliation)
 
-- [ ] **XFER-1** — Transfer-matching candidate logic (pure function): opposite-signed, same-magnitude, `TRANSFER_*` category, date-tolerance window (section 2.4, ADR-0006).
-- [ ] **XFER-2** — `transfer-matching` BullMQ job: runs after categorization completes for a sync batch, scoped to the user's own accounts.
-- [ ] **XFER-3** — Apply a match: set `transferGroupId` + `excludeFromCashFlow` on both sides.
-- [ ] **XFER-4** — Age unmatched `TRANSFER_*` transactions into the Tier 4 review queue after a configurable window.
-- [ ] **XFER-5** — Emit the affected-date-bucket signal for rollup recompute (feeds ANLY-2).
-- [ ] **XFER-6** — Unit tests for the matching heuristic — synthetic transaction pairs, edge cases (fees, same-day duplicates), written first.
+- [x] **XFER-1** — Transfer-matching candidate logic (pure function): opposite-signed, same-magnitude, `TRANSFER_*` category, date-tolerance window (section 2.4, ADR-0006). _Reads `Transaction.providerCategory` (ADR-0029, a new field), not the CAT-9 taxonomy -- see that ADR for why they're different signals. Deterministic greedy pairing (`apps/worker/src/transfer/matching.ts`)._
+- [x] **XFER-2** — `transfer-matching` BullMQ job: runs after categorization completes for a sync batch, scoped to the user's own accounts. _Chains off `categorize-llm`'s completion (`triggerTransferMatching()`, called from `categorizeLlm.ts`), unconditional on whether that run confirmed anything -- matching only needs `providerCategory`, already set at sync time._
+- [x] **XFER-3** — Apply a match: set `transferGroupId` + `excludeFromCashFlow` on both sides. _`TransactionRepository.applyTransferMatch()` was already built and tested ahead of this story landing; the job just generates a `crypto.randomUUID()` per pair and calls it._
+- [x] **XFER-4** — Age unmatched `TRANSFER_*` transactions into the Tier 4 review queue after a configurable window (`XFER_UNMATCHED_AGE_DAYS`, default 3 days). Preserves the existing category value, just flips `tier`/`status` to `needs_review` -- idempotent across runs. _The manual "confirm external / pair it" actions this feeds still have no UI to call them from -- CAT-7/`apps/web`, the same deferred gap ADR-0027/ADR-0028 already flag._
+- [x] **XFER-5** — Emit the affected-date-bucket signal for rollup recompute (feeds ANLY-2). _`TransferMatchingResult.touchedDayBuckets`/`.touchedMonthBuckets`, same shape/mechanism `SyncConnectionResult` already uses -- left deliberately unwired for ANLY-2, same as provider-sync's own signal._
+- [x] **XFER-6** — Unit tests for the matching heuristic — synthetic transaction pairs, edge cases (fees, same-day duplicates), written first. _`apps/worker/src/transfer/matching.test.ts`, hand-traced against the implementation (vitest can't run in either sandbox this was built in -- AGENTS.md)._
 
 ## Epic: ANLY — Analytics & Dashboard
 
