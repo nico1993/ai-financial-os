@@ -1,10 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
+  CATEGORIZE_LLM_ATTEMPTS,
   PROVIDER_SYNC_ATTEMPTS,
   QUEUE_NAMES,
+  categorizeLlmJobId,
+  categorizeLlmJobOptions,
+  enqueueCategorizeLlm,
   enqueueProviderSync,
   providerSyncJobId,
   providerSyncJobOptions,
+  type CategorizeLlmJobData,
+  type CategorizeLlmJobOptions,
+  type CategorizeLlmQueueLike,
   type ProviderSyncJobData,
   type ProviderSyncJobOptions,
   type ProviderSyncQueueLike,
@@ -22,6 +29,31 @@ function fakeQueue(): { queue: ProviderSyncQueueLike; adds: RecordedAdd[]; held:
   const adds: RecordedAdd[] = [];
   const held = new Set<string>();
   const queue: ProviderSyncQueueLike = {
+    async add(name, data, opts) {
+      if (held.has(opts.jobId)) return { id: opts.jobId };
+      held.add(opts.jobId);
+      adds.push({ name, data, opts });
+      return { id: opts.jobId };
+    },
+  };
+  return { queue, adds, held };
+}
+
+interface RecordedCategorizeAdd {
+  name: string;
+  data: CategorizeLlmJobData;
+  opts: CategorizeLlmJobOptions;
+}
+
+/** Same dedup mimicry as fakeQueue(), for the categorize-llm queue. */
+function fakeCategorizeQueue(): {
+  queue: CategorizeLlmQueueLike;
+  adds: RecordedCategorizeAdd[];
+  held: Set<string>;
+} {
+  const adds: RecordedCategorizeAdd[] = [];
+  const held = new Set<string>();
+  const queue: CategorizeLlmQueueLike = {
     async add(name, data, opts) {
       if (held.has(opts.jobId)) return { id: opts.jobId };
       held.add(opts.jobId);
@@ -53,7 +85,12 @@ describe("providerSyncJobId", () => {
 
 describe("providerSyncJobOptions", () => {
   it("carries the dedup jobId", () => {
-    expect(providerSyncJobOptions("conn-1").jobId).toBe("sync:conn-1");
+    // Hyphen, not colon -- see providerSyncJobId's "contains no colon"
+    // test above. This assertion itself used to read "sync:conn-1", a
+    // leftover from before the ADR-0022 fix that never got updated here;
+    // it was passing only because it was asserting the same wrong value
+    // the (also since-fixed) implementation used to return.
+    expect(providerSyncJobOptions("conn-1").jobId).toBe("sync-conn-1");
   });
 
   it("removes finished jobs so the dedup key frees up again", () => {
@@ -110,6 +147,87 @@ describe("enqueueProviderSync", () => {
     await enqueueProviderSync(queue, "conn-1");
     held.delete(providerSyncJobId("conn-1")); // job completed, removeOnComplete fired
     await enqueueProviderSync(queue, "conn-1");
+
+    expect(adds).toHaveLength(2);
+  });
+});
+
+describe("categorizeLlmJobId", () => {
+  it("is derived from the user id, so all triggers agree on it", () => {
+    expect(categorizeLlmJobId("user-1")).toBe("categorize-user-1");
+  });
+
+  it("differs between users", () => {
+    expect(categorizeLlmJobId("user-1")).not.toBe(categorizeLlmJobId("user-2"));
+  });
+
+  it("contains no colon, which BullMQ rejects outright", () => {
+    // Same BullMQ constraint providerSyncJobId guards against (ADR-0022):
+    // a custom job id containing ":" throws at enqueue time.
+    expect(categorizeLlmJobId("507f1f77bcf86cd799439011")).not.toContain(":");
+  });
+});
+
+describe("categorizeLlmJobOptions", () => {
+  it("carries the dedup jobId", () => {
+    expect(categorizeLlmJobOptions("user-1").jobId).toBe("categorize-user-1");
+  });
+
+  it("removes finished jobs so the dedup key frees up again", () => {
+    // Same load-bearing reason as providerSyncJobOptions': retaining a
+    // finished job under this user's id would block every later
+    // categorize-llm enqueue for them (ADR-0022).
+    const opts = categorizeLlmJobOptions("user-1");
+    expect(opts.removeOnComplete).toBe(true);
+    expect(opts.removeOnFail).toBe(true);
+  });
+
+  it("retries with exponential backoff, fewer attempts than provider-sync", () => {
+    const opts = categorizeLlmJobOptions("user-1");
+    expect(opts.attempts).toBe(CATEGORIZE_LLM_ATTEMPTS);
+    expect(opts.attempts).toBeLessThan(PROVIDER_SYNC_ATTEMPTS);
+    expect(opts.backoff.type).toBe("exponential");
+    expect(opts.backoff.delay).toBeGreaterThan(0);
+  });
+});
+
+describe("enqueueCategorizeLlm", () => {
+  it("enqueues onto the categorize-llm queue with the user id as payload", async () => {
+    const { queue, adds } = fakeCategorizeQueue();
+
+    await enqueueCategorizeLlm(queue, "user-1");
+
+    expect(adds).toHaveLength(1);
+    expect(adds[0]?.name).toBe(QUEUE_NAMES.categorizeLlm);
+    expect(adds[0]?.data).toEqual({ userId: "user-1" });
+  });
+
+  it("collapses repeat triggers for the same user into one job", async () => {
+    const { queue, adds } = fakeCategorizeQueue();
+
+    // Several sync runs finishing back-to-back before the LLM catches up.
+    await enqueueCategorizeLlm(queue, "user-1");
+    await enqueueCategorizeLlm(queue, "user-1");
+    await enqueueCategorizeLlm(queue, "user-1");
+
+    expect(adds).toHaveLength(1);
+  });
+
+  it("does not collapse triggers for different users", async () => {
+    const { queue, adds } = fakeCategorizeQueue();
+
+    await enqueueCategorizeLlm(queue, "user-1");
+    await enqueueCategorizeLlm(queue, "user-2");
+
+    expect(adds.map((add) => add.data.userId)).toEqual(["user-1", "user-2"]);
+  });
+
+  it("enqueues again once the previous job has been removed", async () => {
+    const { queue, adds, held } = fakeCategorizeQueue();
+
+    await enqueueCategorizeLlm(queue, "user-1");
+    held.delete(categorizeLlmJobId("user-1")); // job completed, removeOnComplete fired
+    await enqueueCategorizeLlm(queue, "user-1");
 
     expect(adds).toHaveLength(2);
   });

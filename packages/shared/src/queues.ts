@@ -17,6 +17,11 @@ export const QUEUE_NAMES = {
    * carry a `sync-{connectionId}` dedup id, whereas this one is a single
    * repeating fan-out with no connection of its own. */
   providerSyncScheduler: "provider-sync-scheduler",
+  /** Tier 3 LLM categorization (CAT-4, ARCHITECTURE.md §2.3, ADR-0026).
+   * Its own queue, separate from provider-sync, for the same reason
+   * ADR-0025 gives provider-sync-scheduler one: LLM latency and
+   * concurrency have nothing to do with a Plaid drain's, so mixing them
+   * onto one queue would mean one's backlog blocks the other. */
   categorizeLlm: "categorize-llm",
   transferMatching: "transfer-matching",
   rollups: "rollups",
@@ -121,4 +126,83 @@ export async function enqueueProviderSync(
   connectionId: string,
 ): Promise<void> {
   await queue.add(QUEUE_NAMES.providerSync, { connectionId }, providerSyncJobOptions(connectionId));
+}
+
+/** Dedup key for the categorize-llm queue (CAT-4), mirroring ING-5's
+ * providerSyncJobId: several sync runs finishing back-to-back before the
+ * LLM catches up collapse onto one queued job, instead of stacking up
+ * duplicates that would all query the same needs_review set. Same hyphen
+ * separator as providerSyncJobId, for the same reason (ADR-0022) --
+ * BullMQ rejects a custom job id containing ":". */
+export function categorizeLlmJobId(userId: string): string {
+  return `categorize-${userId}`;
+}
+
+/** Just the user id (ADR-0026): the job queries findNeedsReview() itself
+ * at run time rather than being handed a specific transaction list at
+ * enqueue time -- the same "work list comes from the database, not the
+ * schedule" choice ADR-0025 makes for the fallback poll. A transaction
+ * that was already needs_review before this queue existed, or one a
+ * previous LLM attempt left low-confidence, is picked up by the next run
+ * without any extra bookkeeping. */
+export interface CategorizeLlmJobData {
+  userId: string;
+}
+
+export interface CategorizeLlmJobOptions {
+  jobId: string;
+  attempts: number;
+  backoff: { type: "exponential"; delay: number };
+  removeOnComplete: boolean;
+  removeOnFail: boolean;
+}
+
+/** Fewer attempts than provider-sync's, and no rate-limit handling to
+ * speak of: an LLM call that still fails after its own internal retry
+ * (ADR-0026 -- OllamaCategorizationProvider already retries once on a
+ * totally-unparseable response) is unlikely to succeed just because
+ * BullMQ tries again a few seconds later, and a local Ollama instance has
+ * no external quota to wait out the way Plaid does. */
+export const CATEGORIZE_LLM_ATTEMPTS = 3;
+export const CATEGORIZE_LLM_BACKOFF_MS = 10_000;
+
+/**
+ * Job options for every categorize-llm enqueue. `removeOnComplete` /
+ * `removeOnFail` are both `true` for the same load-bearing reason as
+ * provider-sync's (ADR-0022): BullMQ resolves a `jobId` collision against
+ * jobs it still retains, including finished ones, so retaining them here
+ * would permanently block this user's dedup key from ever enqueueing
+ * again after the first run.
+ */
+export function categorizeLlmJobOptions(userId: string): CategorizeLlmJobOptions {
+  return {
+    jobId: categorizeLlmJobId(userId),
+    attempts: CATEGORIZE_LLM_ATTEMPTS,
+    backoff: { type: "exponential", delay: CATEGORIZE_LLM_BACKOFF_MS },
+    removeOnComplete: true,
+    removeOnFail: true,
+  };
+}
+
+/** The slice of BullMQ's `Queue` this package needs -- keeps the enqueue
+ * helper testable and bullmq out of packages/shared's dependencies. */
+export interface CategorizeLlmQueueLike {
+  add(
+    name: string,
+    data: CategorizeLlmJobData,
+    opts: CategorizeLlmJobOptions,
+  ): Promise<{ id?: string | null } | null>;
+}
+
+/**
+ * The single supported way to request an LLM categorization pass for a
+ * user (CAT-4). Every sync run that touched transactions goes through
+ * here, the same discipline enqueueProviderSync() enforces for syncs, so
+ * nothing can accidentally skip the dedup key.
+ */
+export async function enqueueCategorizeLlm(
+  queue: CategorizeLlmQueueLike,
+  userId: string,
+): Promise<void> {
+  await queue.add(QUEUE_NAMES.categorizeLlm, { userId }, categorizeLlmJobOptions(userId));
 }
