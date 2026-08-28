@@ -4,7 +4,11 @@
 // into a TransactionCategory) lives in categorize/tier3.ts, testable
 // without a Redis or an LLM.
 import { Queue, Worker, type Job } from "bullmq";
-import { TransactionRepository } from "@financial-os/db";
+import {
+  TransactionRepository,
+  CategoryRepository,
+  MerchantRuleRepository,
+} from "@financial-os/db";
 import type { CategorizationCandidate } from "@financial-os/providers";
 import {
   QUEUE_NAMES,
@@ -15,10 +19,13 @@ import {
 import { env } from "../env.js";
 import { createRedisConnection } from "../redis.js";
 import { getCategorizationProvider } from "../provider.js";
-import { DEFAULT_CATEGORIES } from "../categorize/categories.js";
+import { resolveUserCategoryNames } from "../categorize/userCategories.js";
 import { resolveTier3Outcome } from "../categorize/tier3.js";
+import { buildMerchantRuleWriteBack } from "../categorize/writeBack.js";
 
 const transactions = new TransactionRepository();
+const categories = new CategoryRepository();
+const merchantRules = new MerchantRuleRepository();
 
 export interface CategorizeLlmResult {
   /** How many transactions were needs_review when this run took its
@@ -37,6 +44,10 @@ export interface CategorizeLlmResult {
    * flight. The now-stale LLM verdict is discarded rather than
    * overwriting the human's decision. */
   skippedRace: number;
+  /** Confirmed results cached into MerchantRules this run (CAT-6,
+   * ADR-0027) -- a subset of `confirmed`, since writeBack.ts only writes
+   * back a confirmed category, never a needs_review one. */
+  merchantRulesWritten: number;
 }
 
 async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
@@ -47,13 +58,24 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
   const needsReview = await transactions.findNeedsReview(userId);
 
   if (needsReview.length === 0) {
-    return { candidatesConsidered: 0, confirmed: 0, stillNeedsReview: 0, skippedRace: 0 };
+    return {
+      candidatesConsidered: 0,
+      confirmed: 0,
+      stillNeedsReview: 0,
+      skippedRace: 0,
+      merchantRulesWritten: 0,
+    };
   }
 
   const provider = getCategorizationProvider();
+  // Once per run, not once per batch (CAT-9, ADR-0028) -- categories don't
+  // change mid-run, and this is also where a user's first-ever run seeds
+  // their Category rows from DEFAULT_CATEGORY_SEEDS.
+  const categoryNames = await resolveUserCategoryNames(categories, userId);
   let confirmed = 0;
   let stillNeedsReview = 0;
   let skippedRace = 0;
+  let merchantRulesWritten = 0;
 
   for (let start = 0; start < needsReview.length; start += env.CATEGORIZE_LLM_BATCH_SIZE) {
     const batch = needsReview.slice(start, start + env.CATEGORIZE_LLM_BATCH_SIZE);
@@ -64,8 +86,15 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
       amount: tx.amount,
       isoCurrencyCode: tx.isoCurrencyCode,
     }));
+    // CAT-6's write-back needs each result's normalized merchant, which
+    // CategorizationResult itself doesn't carry (it only echoes
+    // transactionId) -- built once per batch rather than re-scanning
+    // `batch` per result.
+    const merchantByTransactionId = new Map(
+      batch.map((tx) => [tx._id.toString(), tx.merchantNameNormalized]),
+    );
 
-    const results = await provider.categorizeBatch(candidates, DEFAULT_CATEGORIES);
+    const results = await provider.categorizeBatch(candidates, categoryNames);
 
     for (const result of results) {
       const category = resolveTier3Outcome(result, env.CATEGORIZE_LLM_CONFIDENCE_THRESHOLD);
@@ -82,8 +111,25 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
       }
 
       await transactions.updateCategory(result.transactionId, category);
-      if (category.status === "confirmed") confirmed += 1;
-      else stillNeedsReview += 1;
+      if (category.status === "confirmed") {
+        confirmed += 1;
+      } else {
+        stillNeedsReview += 1;
+      }
+
+      // CAT-6: cache a confirmed decision into Tier 1 so the same
+      // merchant never needs LLM inference again. Skipped race above
+      // already discarded stale results before this point, so
+      // `current.category.status === "needs_review"` held just before the
+      // write this write-back is caching.
+      const normalizedMerchant = merchantByTransactionId.get(result.transactionId);
+      if (normalizedMerchant) {
+        const writeBack = buildMerchantRuleWriteBack(userId, normalizedMerchant, category, "llm");
+        if (writeBack) {
+          await merchantRules.upsertExact(writeBack);
+          merchantRulesWritten += 1;
+        }
+      }
     }
   }
 
@@ -92,6 +138,7 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
     confirmed,
     stillNeedsReview,
     skippedRace,
+    merchantRulesWritten,
   };
 
   if (result.skippedRace > 0) {
@@ -104,7 +151,7 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
   }
 
   console.info(
-    `[categorize-llm] user=${userId} considered=${result.candidatesConsidered} confirmed=${result.confirmed} stillNeedsReview=${result.stillNeedsReview} skippedRace=${result.skippedRace}`,
+    `[categorize-llm] user=${userId} considered=${result.candidatesConsidered} confirmed=${result.confirmed} stillNeedsReview=${result.stillNeedsReview} skippedRace=${result.skippedRace} merchantRulesWritten=${result.merchantRulesWritten}`,
   );
 
   return result;
