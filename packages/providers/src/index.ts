@@ -29,3 +29,17 @@ export {
 
 export { createPlaidClient, type PlaidClientConfig } from "./plaid/plaidClient.js";
 export { PlaidProvider, type PlaidProviderConfig } from "./plaid/PlaidProvider.js";
+
+export type {
+  CategorizationCandidate,
+  CategorizationProvider,
+  CategorizationResult,
+} from "./CategorizationProvider.js";
+export {
+  CategorizationProviderError,
+  CategorizationProviderUnavailableError,
+} from "./categorizationErrors.js";
+export {
+  OllamaCategorizationProvider,
+  type OllamaCategorizationProviderConfig,
+} from "./ollama/OllamaCategorizationProvider.js";
