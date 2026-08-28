@@ -89,6 +89,13 @@ export function toTransactionInput(
     merchantNameNormalized: normalizeMerchantName(tx),
     description: tx.description,
     category: UNCATEGORIZED,
+    // The provider's own raw category signal (Plaid's
+    // personal_finance_category.detailed), passed straight through --
+    // ADR-0029. Previously captured by PlaidProvider's normalizeTransaction()
+    // onto NormalizedTransaction.providerCategory but dropped here before
+    // it ever reached storage, leaving the transfer-matching pass (§2.4)
+    // with no TRANSFER_-prefixed/payment-type signal to actually read.
+    providerCategory: tx.providerCategory,
     pending: tx.pending,
     // transferGroupId / excludeFromCashFlow are deliberately absent: those
     // belong to the transfer-matching pass (XFER-3), and setting them here

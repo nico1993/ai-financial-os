@@ -22,6 +22,7 @@ import { getCategorizationProvider } from "../provider.js";
 import { resolveUserCategoryNames } from "../categorize/userCategories.js";
 import { resolveTier3Outcome } from "../categorize/tier3.js";
 import { buildMerchantRuleWriteBack } from "../categorize/writeBack.js";
+import { triggerTransferMatching } from "./transferMatching.js";
 
 const transactions = new TransactionRepository();
 const categories = new CategoryRepository();
@@ -58,6 +59,13 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
   const needsReview = await transactions.findNeedsReview(userId);
 
   if (needsReview.length === 0) {
+    // XFER-2: still hand off to transfer-matching (ADR-0029) even when
+    // there was nothing left for Tier 3 to do -- Tier 1/2 may have
+    // resolved every transaction from this sync batch inline, and those
+    // are just as valid transfer-matching candidates as anything Tier 3
+    // touches. Matching reads Transaction.providerCategory, set at sync
+    // time, not any tier's category decision.
+    await triggerTransferMatching(userId);
     return {
       candidatesConsidered: 0,
       confirmed: 0,
@@ -153,6 +161,11 @@ async function runCategorization(userId: string): Promise<CategorizeLlmResult> {
   console.info(
     `[categorize-llm] user=${userId} considered=${result.candidatesConsidered} confirmed=${result.confirmed} stillNeedsReview=${result.stillNeedsReview} skippedRace=${result.skippedRace} merchantRulesWritten=${result.merchantRulesWritten}`,
   );
+
+  // XFER-2: hand off to the transfer-matching queue (§2.4, ADR-0029) now
+  // that this run's categorization pass is done -- unconditionally, same
+  // reasoning as the early-return branch above.
+  await triggerTransferMatching(userId);
 
   return result;
 }

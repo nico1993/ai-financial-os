@@ -107,4 +107,33 @@ describe("loadEnv", () => {
       /CATEGORIZE_LLM_BATCH_SIZE/,
     );
   });
+
+  it("defaults the transfer-matching tolerances, aging window, and concurrency", () => {
+    const env = loadEnv(baseEnv());
+    expect(env.XFER_MATCH_DATE_TOLERANCE_DAYS).toBe(3);
+    expect(env.XFER_MATCH_AMOUNT_TOLERANCE_CENTS).toBe(100);
+    expect(env.XFER_UNMATCHED_AGE_DAYS).toBe(3);
+    expect(env.XFER_MATCHING_CONCURRENCY).toBe(2);
+  });
+
+  it("coerces the transfer-matching numeric knobs from their string forms", () => {
+    const env = loadEnv(
+      baseEnv({
+        XFER_MATCH_DATE_TOLERANCE_DAYS: "5",
+        XFER_MATCH_AMOUNT_TOLERANCE_CENTS: "250",
+        XFER_UNMATCHED_AGE_DAYS: "7",
+        XFER_MATCHING_CONCURRENCY: "3",
+      }),
+    );
+    expect(env.XFER_MATCH_DATE_TOLERANCE_DAYS).toBe(5);
+    expect(env.XFER_MATCH_AMOUNT_TOLERANCE_CENTS).toBe(250);
+    expect(env.XFER_UNMATCHED_AGE_DAYS).toBe(7);
+    expect(env.XFER_MATCHING_CONCURRENCY).toBe(3);
+  });
+
+  it("rejects a non-positive transfer-matching concurrency", () => {
+    expect(() => loadEnv(baseEnv({ XFER_MATCHING_CONCURRENCY: "0" }))).toThrow(
+      /XFER_MATCHING_CONCURRENCY/,
+    );
+  });
 });

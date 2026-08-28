@@ -77,6 +77,25 @@ const envSchema = z.object({
    * than actually parallelizing, so the default is 1 (serialize) rather
    * than optimistically higher. */
   CATEGORIZE_LLM_CONCURRENCY: z.coerce.number().int().positive().default(1),
+
+  // --- Transfer matching (XFER-1..XFER-6, ARCHITECTURE.md §2.4, ADR-0006, ADR-0029) ---
+  /** How many calendar days apart a matched pair's dates may fall (§2.4:
+   * "ACH transfers commonly settle 1-3 days apart across accounts"). */
+  XFER_MATCH_DATE_TOLERANCE_DAYS: z.coerce.number().int().nonnegative().default(3),
+  /** How many cents a matched pair's magnitudes may differ by, covering a
+   * wire/ACH fee shaved off one side (§2.4's "near-equal, to allow for a
+   * fee"). $1.00 is a starting point, not a measured constant -- easy to
+   * tune once real transfer fees are seen in practice. */
+  XFER_MATCH_AMOUNT_TOLERANCE_CENTS: z.coerce.number().int().nonnegative().default(100),
+  /** How many days an unmatched TRANSFER_-prefixed/payment-type transaction sits
+   * with no counterpart before XFER-4 ages it into the Tier 4 review
+   * queue (§2.4's own example: "3 days with no match found"). */
+  XFER_UNMATCHED_AGE_DAYS: z.coerce.number().int().nonnegative().default(3),
+  /** How many transfer-matching jobs may run at once. Unlike
+   * CATEGORIZE_LLM_CONCURRENCY, this job is pure DB reads/writes with no
+   * GPU/LLM bottleneck to serialize around, so it can default higher than
+   * 1, in line with PROVIDER_SYNC_CONCURRENCY's default. */
+  XFER_MATCHING_CONCURRENCY: z.coerce.number().int().positive().default(2),
 });
 
 export type Env = z.infer<typeof envSchema>;
