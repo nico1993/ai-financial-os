@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "echo \"@financial-os/web: no build configured yet\"",
-    "dev": "echo \"@financial-os/web: no dev server configured yet\"",
+    "build": "vite build",
+    "dev": "vite",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -13,9 +13,19 @@
   },
   "devDependencies": {
     "@financial-os/config": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^9.17.0",
     "jsdom": "^25.0.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.7.2",
+    "vite": "^8.2.2",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }
