@@ -96,6 +96,18 @@ const envSchema = z.object({
    * GPU/LLM bottleneck to serialize around, so it can default higher than
    * 1, in line with PROVIDER_SYNC_CONCURRENCY's default. */
   XFER_MATCHING_CONCURRENCY: z.coerce.number().int().positive().default(2),
+
+  // --- Rollups (ANLY-1/ANLY-2, ARCHITECTURE.md §4.4, ADR-0008, ADR-0034) ---
+  /** How many rollups jobs may run at once. Same reasoning as
+   * XFER_MATCHING_CONCURRENCY's default: pure DB reads/writes, no GPU/LLM
+   * bottleneck and no external provider quota to serialize around. */
+  ROLLUP_CONCURRENCY: z.coerce.number().int().positive().default(2),
+
+  // --- Subscription detection (ANLY-7, ARCHITECTURE.md §4.2) ---
+  /** Cron pattern for the nightly batch job -- 3am UTC by default, a
+   * quiet hour unlikely to overlap a user actively syncing/reviewing.
+   * BullMQ's job scheduler accepts a `pattern` directly (ADR-0036). */
+  SUBSCRIPTION_DETECTION_CRON: z.string().min(1).default("0 3 * * *"),
 });
 
 export type Env = z.infer<typeof envSchema>;

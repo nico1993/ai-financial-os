@@ -1,5 +1,6 @@
 import { beforeAll, afterEach, afterAll, describe, it, expect } from "vitest";
 import { setupTestDb } from "../test/mongo-memory.js";
+import mongoose from "mongoose";
 import { RollupRepository } from "./RollupRepository.js";
 
 const db = setupTestDb();
@@ -38,6 +39,29 @@ describe("RollupRepository", () => {
       expect(series[0]?.netWorth).toBe(12_000);
     });
 
+    it("upsertDailyBalanceSnapshot stores per-account balances as real ObjectIds from plain accountId strings", async () => {
+      const accountId = new mongoose.Types.ObjectId().toString();
+      const date = new Date("2026-01-15T00:00:00.000Z");
+
+      await repo.upsertDailyBalanceSnapshot({
+        userId: "user-1",
+        date,
+        netWorth: 5_000,
+        assets: 5_000,
+        liabilities: 0,
+        accounts: [{ accountId, balance: 5_000 }],
+      });
+
+      const series = await repo.getNetWorthSeries("user-1", {
+        start: new Date("2026-01-01"),
+        end: new Date("2026-01-31"),
+      });
+      expect(series).toHaveLength(1);
+      expect(series[0]?.accounts).toHaveLength(1);
+      expect(series[0]?.accounts[0]?.accountId.toString()).toBe(accountId);
+      expect(series[0]?.accounts[0]?.balance).toBe(5_000);
+    });
+
     it("getNetWorthSeries returns the range sorted ascending by date", async () => {
       await repo.upsertDailyBalanceSnapshot({
         userId: "user-1",
@@ -61,6 +85,52 @@ describe("RollupRepository", () => {
         end: new Date("2026-01-31"),
       });
       expect(series.map((s) => s.netWorth)).toEqual([1, 2]);
+    });
+  });
+
+  describe("getLatestNetWorthSnapshotBefore", () => {
+    it("returns the most recent snapshot at or before the given date", async () => {
+      await repo.upsertDailyBalanceSnapshot({
+        userId: "user-1",
+        date: new Date("2025-11-01"),
+        netWorth: 1,
+        assets: 1,
+        liabilities: 0,
+        accounts: [],
+      });
+      await repo.upsertDailyBalanceSnapshot({
+        userId: "user-1",
+        date: new Date("2025-12-15"),
+        netWorth: 2,
+        assets: 2,
+        liabilities: 0,
+        accounts: [],
+      });
+      await repo.upsertDailyBalanceSnapshot({
+        userId: "user-1",
+        date: new Date("2026-02-01"), // after the query date -- must be ignored
+        netWorth: 3,
+        assets: 3,
+        liabilities: 0,
+        accounts: [],
+      });
+
+      const result = await repo.getLatestNetWorthSnapshotBefore("user-1", new Date("2026-01-01"));
+      expect(result?.netWorth).toBe(2);
+    });
+
+    it("returns null when there is no snapshot at or before the date yet", async () => {
+      await repo.upsertDailyBalanceSnapshot({
+        userId: "user-1",
+        date: new Date("2026-03-01"),
+        netWorth: 1,
+        assets: 1,
+        liabilities: 0,
+        accounts: [],
+      });
+
+      const result = await repo.getLatestNetWorthSnapshotBefore("user-1", new Date("2026-01-01"));
+      expect(result).toBeNull();
     });
   });
 

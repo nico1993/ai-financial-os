@@ -7,6 +7,7 @@ import {
   normalizeMerchantName,
   toTransactionInput,
   utcDayStart,
+  utcMonthEnd,
   utcMonthStart,
 } from "./normalize.js";
 
@@ -91,6 +92,30 @@ describe("utcDayStart / utcMonthStart", () => {
     // Plaid sends "2024-03-15", which parses as UTC midnight. Bucketing it
     // must not roll it back to the 14th (AGENTS.md date convention).
     expect(utcDayStart(new Date("2024-03-15")).toISOString()).toBe("2024-03-15T00:00:00.000Z");
+  });
+
+  it("utcMonthEnd finds the last day of a 31-day month", () => {
+    expect(utcMonthEnd(new Date("2024-03-01T00:00:00.000Z")).toISOString()).toBe(
+      "2024-03-31T00:00:00.000Z",
+    );
+  });
+
+  it("utcMonthEnd finds the last day of February in a leap year", () => {
+    expect(utcMonthEnd(new Date("2024-02-10T00:00:00.000Z")).toISOString()).toBe(
+      "2024-02-29T00:00:00.000Z",
+    );
+  });
+
+  it("utcMonthEnd finds the last day of February in a non-leap year", () => {
+    expect(utcMonthEnd(new Date("2025-02-10T00:00:00.000Z")).toISOString()).toBe(
+      "2025-02-28T00:00:00.000Z",
+    );
+  });
+
+  it("utcMonthEnd is unaffected by the day-of-month it's given", () => {
+    expect(utcMonthEnd(new Date("2024-03-15T23:45:00.000Z")).toISOString()).toBe(
+      utcMonthEnd(new Date("2024-03-01T00:00:00.000Z")).toISOString(),
+    );
   });
 });
 

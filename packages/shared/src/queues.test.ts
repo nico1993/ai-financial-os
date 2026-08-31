@@ -3,14 +3,17 @@ import {
   CATEGORIZE_LLM_ATTEMPTS,
   PROVIDER_SYNC_ATTEMPTS,
   QUEUE_NAMES,
+  ROLLUP_ATTEMPTS,
   TRANSFER_MATCHING_ATTEMPTS,
   categorizeLlmJobId,
   categorizeLlmJobOptions,
   enqueueCategorizeLlm,
   enqueueProviderSync,
+  enqueueRollup,
   enqueueTransferMatching,
   providerSyncJobId,
   providerSyncJobOptions,
+  rollupJobOptions,
   transferMatchingJobId,
   transferMatchingJobOptions,
   type CategorizeLlmJobData,
@@ -19,6 +22,9 @@ import {
   type ProviderSyncJobData,
   type ProviderSyncJobOptions,
   type ProviderSyncQueueLike,
+  type RollupJobData,
+  type RollupJobOptions,
+  type RollupQueueLike,
   type TransferMatchingJobData,
   type TransferMatchingJobOptions,
   type TransferMatchingQueueLike,
@@ -346,5 +352,93 @@ describe("enqueueTransferMatching", () => {
     await enqueueTransferMatching(queue, "user-1");
 
     expect(adds).toHaveLength(2);
+  });
+});
+
+interface RecordedRollupAdd {
+  name: string;
+  data: RollupJobData;
+  opts: RollupJobOptions;
+}
+
+/** No dedup to mimic here (ADR-0034) -- every add() is recorded, unlike
+ * fakeQueue()/fakeCategorizeQueue()/fakeTransferMatchingQueue() above. */
+function fakeRollupQueue(): { queue: RollupQueueLike; adds: RecordedRollupAdd[] } {
+  const adds: RecordedRollupAdd[] = [];
+  const queue: RollupQueueLike = {
+    async add(name, data, opts) {
+      adds.push({ name, data, opts });
+      return { id: `${adds.length}` };
+    },
+  };
+  return { queue, adds };
+}
+
+describe("rollupJobOptions", () => {
+  it("carries no dedup jobId, unlike the other three queues' options", () => {
+    expect(rollupJobOptions()).not.toHaveProperty("jobId");
+  });
+
+  it("removes finished jobs, for consistency with the other queues", () => {
+    const opts = rollupJobOptions();
+    expect(opts.removeOnComplete).toBe(true);
+    expect(opts.removeOnFail).toBe(true);
+  });
+
+  it("retries with exponential backoff, same attempts as categorize-llm", () => {
+    const opts = rollupJobOptions();
+    expect(opts.attempts).toBe(ROLLUP_ATTEMPTS);
+    expect(opts.attempts).toBe(CATEGORIZE_LLM_ATTEMPTS);
+    expect(opts.backoff.type).toBe("exponential");
+    expect(opts.backoff.delay).toBeGreaterThan(0);
+  });
+});
+
+describe("enqueueRollup", () => {
+  it("enqueues onto the rollups queue with userId + ISO bucket strings as payload", async () => {
+    const { queue, adds } = fakeRollupQueue();
+    const day = new Date("2026-01-15T00:00:00.000Z");
+    const month = new Date("2026-01-01T00:00:00.000Z");
+
+    await enqueueRollup(queue, "user-1", [day], [month]);
+
+    expect(adds).toHaveLength(1);
+    expect(adds[0]?.name).toBe(QUEUE_NAMES.rollups);
+    expect(adds[0]?.data).toEqual({
+      userId: "user-1",
+      dayBuckets: [day.toISOString()],
+      monthBuckets: [month.toISOString()],
+    });
+  });
+
+  it("does not collapse repeat triggers -- every call enqueues its own job", async () => {
+    const { queue, adds } = fakeRollupQueue();
+    const day = new Date("2026-01-15T00:00:00.000Z");
+
+    // Unlike the other three queues' dedup, two triggers for the same user
+    // must both survive: each could carry a different bucket list.
+    await enqueueRollup(queue, "user-1", [day], []);
+    await enqueueRollup(queue, "user-1", [day], []);
+
+    expect(adds).toHaveLength(2);
+  });
+
+  it("is a no-op when both bucket lists are empty", async () => {
+    const { queue, adds } = fakeRollupQueue();
+
+    await enqueueRollup(queue, "user-1", [], []);
+
+    expect(adds).toHaveLength(0);
+  });
+
+  it("still enqueues when only one of the two bucket lists is non-empty", async () => {
+    const { queue, adds } = fakeRollupQueue();
+    const month = new Date("2026-02-01T00:00:00.000Z");
+
+    await enqueueRollup(queue, "user-1", [], [month]);
+
+    expect(adds).toHaveLength(1);
+    expect(adds[0]?.data.dayBuckets).toEqual([]);
+    expect(adds[0]?.data.monthBuckets).toEqual([month.toISOString()]);
   });
 });

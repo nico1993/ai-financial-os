@@ -3,6 +3,16 @@
 // Monthly Cash Flow endpoint (ANLY-4) reads from here rather than grouping
 // raw Transactions by $dateTrunc on every request. Transfers
 // (excludeFromCashFlow: true) are excluded before these totals are computed.
+//
+// income/expenses corrected (ADR-0034): the field comments below
+// originally had the Plaid sign convention inverted -- "income: sum of
+// positive amounts" -- when the convention documented everywhere else in
+// this codebase (matching.ts, PlaidProvider.ts,
+// OllamaCategorizationProvider.ts) is the opposite: positive = money
+// LEAVING the account (an expense), negative = money coming in (income).
+// No rollup job existed yet to have actually computed a wrong number from
+// this -- caught while building ANLY-1's recompute logic, before anything
+// used it.
 import mongoose, { Schema, model, type Model } from "mongoose";
 
 export interface MonthlyRollupDocument {
@@ -10,9 +20,11 @@ export interface MonthlyRollupDocument {
   userId: string;
   /** UTC Date truncated to the first of the month ($dateTrunc unit: 'month'). */
   month: Date;
-  /** Integer cents — sum of positive, non-transfer transaction amounts. */
+  /** Integer cents, magnitude — sum of negative (money arriving),
+   * non-transfer transaction amounts. */
   income: number;
-  /** Integer cents, positive magnitude — sum of negative, non-transfer amounts. */
+  /** Integer cents — sum of positive (money leaving), non-transfer
+   * transaction amounts. */
   expenses: number;
   createdAt: Date;
   updatedAt: Date;

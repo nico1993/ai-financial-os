@@ -53,4 +53,13 @@ export class UserRepository {
   async count(): Promise<number> {
     return UserModel.countDocuments();
   }
+
+  /** Every user id in the system -- ANLY-7's subscription-detection
+   * scheduler (mirroring ConnectionRepository.findSyncable()'s role for
+   * providerSyncScheduler.ts) enumerates all of them rather than assuming
+   * a single hardcoded user, even though this app is built for one. */
+  async findAllIds(): Promise<string[]> {
+    const docs = await UserModel.find().select("_id").lean<{ _id: unknown }[]>();
+    return docs.map((doc) => String(doc._id));
+  }
 }

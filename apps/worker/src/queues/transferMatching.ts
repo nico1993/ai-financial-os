@@ -16,6 +16,7 @@ import { env } from "../env.js";
 import { createRedisConnection } from "../redis.js";
 import { utcDayStart, utcMonthStart } from "../sync/normalize.js";
 import { findTransferMatches, isTransferSignalCategory } from "../transfer/matching.js";
+import { triggerRollups } from "./rollups.js";
 
 const transactions = new TransactionRepository();
 
@@ -134,6 +135,14 @@ async function runTransferMatching(userId: string): Promise<TransferMatchingResu
   console.info(
     `[transfer-matching] user=${userId} considered=${result.candidatesConsidered} matched=${result.matched} agedToReview=${result.agedToReview}`,
   );
+
+  // ANLY-2: trigger a targeted rollup recompute for exactly the buckets
+  // THIS run's matches touched (ADR-0008, ADR-0034) -- independently of
+  // providerSync.ts's own trigger, not chained from it. A match changes
+  // excludeFromCashFlow, which stales a MonthlyRollup already computed
+  // for that bucket even if provider-sync's own sync run (possibly
+  // minutes earlier) had nothing left to touch there.
+  await triggerRollups(userId, result.touchedDayBuckets, result.touchedMonthBuckets);
 
   return result;
 }

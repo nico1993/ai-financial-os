@@ -25,6 +25,11 @@ export const QUEUE_NAMES = {
   categorizeLlm: "categorize-llm",
   transferMatching: "transfer-matching",
   rollups: "rollups",
+  /** ANLY-7's nightly batch job. Its own queue for the same reason
+   * providerSyncScheduler gets one (ADR-0025): a repeating, payload-less
+   * scheduled job, not a per-event trigger the way provider-sync/
+   * categorize-llm/transfer-matching/rollups all are. */
+  subscriptionDetection: "subscription-detection",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -59,6 +64,16 @@ export type ProviderSyncScheduleJobData = Record<string, never>;
  * scheduler by this id, so re-registering on every worker boot updates
  * the existing schedule instead of stacking up duplicates. */
 export const PROVIDER_SYNC_SCHEDULER_ID = "provider-sync-fallback-poll";
+
+/** Stable id for ANLY-7's repeating nightly schedule -- same
+ * upsert-by-id idempotency as PROVIDER_SYNC_SCHEDULER_ID above. */
+export const SUBSCRIPTION_DETECTION_SCHEDULER_ID = "subscription-detection-nightly";
+
+/** The nightly job takes no payload -- like ProviderSyncScheduleJobData,
+ * it derives its own work list (every user) from the database at run
+ * time, so a user created after the schedule was registered is picked up
+ * without re-registering anything. */
+export type SubscriptionDetectionJobData = Record<string, never>;
 
 /** Structurally compatible with BullMQ's `JobsOptions` — declared here so
  * packages/shared doesn't need bullmq as a dependency. */
@@ -277,4 +292,99 @@ export async function enqueueTransferMatching(
   userId: string,
 ): Promise<void> {
   await queue.add(QUEUE_NAMES.transferMatching, { userId }, transferMatchingJobOptions(userId));
+}
+
+/** Dedup key for the rollups queue -- NOT used the way
+ * providerSyncJobId/categorizeLlmJobId/transferMatchingJobId are (ADR-0034).
+ * Those three queues derive their whole work list from the database at run
+ * time, so collapsing a duplicate enqueue onto an existing jobId is safe --
+ * the surviving job still does everything the dropped one would have. A
+ * rollups job instead carries a SPECIFIC bucket list as its payload (the
+ * caller's own touchedDayBuckets/touchedMonthBuckets); collapsing two
+ * enqueues via a shared jobId would silently drop whichever one lost the
+ * dedup race, along with the bucket list it carried, and nothing would ever
+ * recompute those buckets. Recompute itself is idempotent -- each bucket's
+ * snapshot is derived fresh from the current Account/Transaction state,
+ * never applied as an incremental delta (ADR-0034) -- so redundant,
+ * overlapping rollups jobs are harmless. There is no correctness reason to
+ * dedup here, only cost, and that cost is negligible at single-user scale.
+ * `rollupJobOptions()` below therefore carries no `jobId` at all. */
+
+/** ANLY-2's targeted recompute signal (ADR-0008): the day/month buckets a
+ * completed provider-sync or transfer-matching run touched. ISO date
+ * strings, not Date objects -- BullMQ serializes job data as JSON, so a
+ * Date would round-trip as a string regardless; declaring the field as a
+ * string here is honest about what the queue actually carries rather than
+ * relying on an implicit coercion the type system wouldn't catch. */
+export interface RollupJobData {
+  userId: string;
+  dayBuckets: string[];
+  monthBuckets: string[];
+}
+
+export interface RollupJobOptions {
+  attempts: number;
+  backoff: { type: "exponential"; delay: number };
+  removeOnComplete: boolean;
+  removeOnFail: boolean;
+}
+
+/** Same attempts/backoff as categorize-llm's and transfer-matching's: a
+ * pure-DB job with no external provider quota to wait out. */
+export const ROLLUP_ATTEMPTS = CATEGORIZE_LLM_ATTEMPTS;
+export const ROLLUP_BACKOFF_MS = CATEGORIZE_LLM_BACKOFF_MS;
+
+/** Job options for every rollups enqueue. `removeOnComplete`/`removeOnFail`
+ * stay `true` for consistency with the other queues (nothing here retains
+ * job history as its source of truth), even though -- unlike the other
+ * three -- there is no dedup jobId for retention to block. */
+export function rollupJobOptions(): RollupJobOptions {
+  return {
+    attempts: ROLLUP_ATTEMPTS,
+    backoff: { type: "exponential", delay: ROLLUP_BACKOFF_MS },
+    removeOnComplete: true,
+    removeOnFail: true,
+  };
+}
+
+/** The slice of BullMQ's `Queue` this package needs -- keeps the enqueue
+ * helper testable and bullmq out of packages/shared's dependencies. */
+export interface RollupQueueLike {
+  add(
+    name: string,
+    data: RollupJobData,
+    opts: RollupJobOptions,
+  ): Promise<{ id?: string | null } | null>;
+}
+
+/**
+ * Requests a targeted rollup recompute (ANLY-2, ADR-0008, ADR-0034).
+ * Called independently by both provider-sync's and transfer-matching's own
+ * job handlers once their own writes are done, each passing its OWN
+ * touchedDayBuckets/touchedMonthBuckets -- not chained through one another.
+ * Transfer-matching's touched buckets only cover buckets its own matching
+ * pass touched, a small subset of what provider-sync ingests, so a single
+ * trigger fired only from the last pipeline stage would miss most ordinary
+ * (non-transfer) transactions.
+ *
+ * A no-op (nothing enqueued) when both bucket lists are empty, so a
+ * sync/match run that touched nothing doesn't create a job with nothing to
+ * do.
+ */
+export async function enqueueRollup(
+  queue: RollupQueueLike,
+  userId: string,
+  dayBuckets: readonly Date[],
+  monthBuckets: readonly Date[],
+): Promise<void> {
+  if (dayBuckets.length === 0 && monthBuckets.length === 0) return;
+  await queue.add(
+    QUEUE_NAMES.rollups,
+    {
+      userId,
+      dayBuckets: dayBuckets.map((d) => d.toISOString()),
+      monthBuckets: monthBuckets.map((d) => d.toISOString()),
+    },
+    rollupJobOptions(),
+  );
 }

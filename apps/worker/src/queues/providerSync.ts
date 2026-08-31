@@ -22,6 +22,7 @@ import { createRedisConnection } from "../redis.js";
 import { getProviderFor } from "../provider.js";
 import { syncConnection, type SyncConnectionResult } from "../sync/syncConnection.js";
 import { triggerCategorizeLlm } from "./categorizeLlm.js";
+import { triggerRollups } from "./rollups.js";
 
 const connections = new ConnectionRepository();
 const accounts = new AccountRepository();
@@ -87,11 +88,15 @@ async function runSync(connectionId: string): Promise<SyncConnectionResult> {
     await triggerCategorizeLlm(connection.userId);
   }
 
-  // One seam deliberately left unwired, owned by a later story: ANLY-2
-  // consumes result.touchedDay/MonthBuckets as the targeted rollup
-  // recompute signal (ADR-0008). Returned from the job so BullMQ records
-  // it on the completed job, rather than being recomputed later from
-  // scratch.
+  // ANLY-2: trigger a targeted rollup recompute for exactly the buckets
+  // this run touched (ADR-0008, ADR-0034) -- independently of
+  // categorize-llm/transfer-matching above, since most of what a sync
+  // touches is ordinary (non-transfer) activity that transfer-matching's
+  // own touched-bucket set never sees. A no-op when both lists are empty
+  // (enqueueRollup's own guard), so a sync that changed nothing doesn't
+  // create a job with nothing to do.
+  await triggerRollups(connection.userId, result.touchedDayBuckets, result.touchedMonthBuckets);
+
   return result;
 }
 

@@ -64,6 +64,19 @@ export function utcMonthStart(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
+/** The last calendar day of `date`'s UTC month, truncated to UTC midnight
+ * -- the inclusive upper bound for a $gte/$lte month-range query
+ * (ANLY-1/ANLY-2's cash-flow rollup, ADR-0034). Every stored Transaction
+ * date is already UTC midnight (Plaid's date is a calendar date, not a
+ * moment in time), so a transaction on this exact day is correctly
+ * included by an $lte comparison against it -- no need to reach into the
+ * next day. `Date.UTC`'s day-of-month argument accepts 0 to mean "the
+ * last day of the previous month," which is exactly this function's
+ * month-plus-one-day-zero trick. */
+export function utcMonthEnd(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+}
+
 export interface TransactionContext {
   userId: string;
   accountId: TransactionDocument["accountId"];
