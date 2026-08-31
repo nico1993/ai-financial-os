@@ -3,12 +3,17 @@ import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { AppShell } from "./layout/AppShell";
 import LoginPage from "./pages/LoginPage";
 import { PageStub } from "./pages/PageStub";
+import NetWorthPage from "./pages/NetWorthPage";
+import CashFlowPage from "./pages/CashFlowPage";
+import SpendingPage from "./pages/SpendingPage";
+import SubscriptionsPage from "./pages/SubscriptionsPage";
 
 // WEB-2's route table -- every page BACKLOG.md names for this epic:
 // login (AUTH-5), net worth, cash flow, spending categories,
-// subscriptions, and the review queue (CAT-7). Each protected page is a
-// PageStub until ANLY-9..11/CAT-7 build the real thing; WEB-2's job is
-// the table and the auth guard, not those pages themselves.
+// subscriptions, and the review queue (CAT-7). ANLY-9 replaced the four
+// analytics PageStubs with the real pages; /review stays a PageStub until
+// CAT-7 (a separate, still-unchecked ticket -- confirmed via BACKLOG.md,
+// not assumed) builds the Tier 4 review queue UI.
 //
 // /login sits outside ProtectedRoute (public); everything else nests
 // under it, then under AppShell for the shared nav/header (WEB-4). "/"
@@ -24,42 +29,10 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <Navigate to="/net-worth" replace /> },
-          {
-            path: "net-worth",
-            element: (
-              <PageStub
-                title="Net Worth"
-                description="Balance history across every linked account (ANLY-3, ANLY-9)."
-              />
-            ),
-          },
-          {
-            path: "cash-flow",
-            element: (
-              <PageStub
-                title="Cash Flow"
-                description="Monthly income vs. expenses, transfers excluded (ANLY-4, ANLY-9)."
-              />
-            ),
-          },
-          {
-            path: "spending",
-            element: (
-              <PageStub
-                title="Spending"
-                description="Category breakdown and trend over time (ANLY-5, ANLY-9)."
-              />
-            ),
-          },
-          {
-            path: "subscriptions",
-            element: (
-              <PageStub
-                title="Subscriptions"
-                description="Recurring charges detected from transaction history (ANLY-7, ANLY-9)."
-              />
-            ),
-          },
+          { path: "net-worth", element: <NetWorthPage /> },
+          { path: "cash-flow", element: <CashFlowPage /> },
+          { path: "spending", element: <SpendingPage /> },
+          { path: "subscriptions", element: <SubscriptionsPage /> },
           {
             path: "review",
             element: (

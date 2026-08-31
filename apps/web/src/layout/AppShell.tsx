@@ -2,6 +2,7 @@ import type { ReactNode, SVGProps } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useLogoutMutation, useSessionQuery } from "../auth/session";
 import { Button } from "../components/ui/button";
+import { useDashboardEvents } from "../lib/useDashboardEvents";
 import { cn } from "../lib/utils";
 
 function IconTrend(props: SVGProps<SVGSVGElement>) {
@@ -79,11 +80,17 @@ const NAV_ITEMS: NavItem[] = [
 
 /** WEB-4's base layout: sidebar nav + header, `<Outlet/>` for the routed
  * page. Sits inside ProtectedRoute in router.tsx, so everything here can
- * assume `useSessionQuery().data` is a real user. */
+ * assume `useSessionQuery().data` is a real user.
+ *
+ * ANLY-10's SSE client mounts here rather than in any one page -- one
+ * connection for the whole authenticated app, alive across every route
+ * change, invalidating the shared `["analytics"]` query prefix no matter
+ * which dashboard page happens to be showing when an event arrives. */
 export function AppShell() {
   const session = useSessionQuery();
   const logout = useLogoutMutation();
   const user = session.data;
+  useDashboardEvents();
 
   return (
     <div className="flex min-h-screen bg-background font-sans text-ink">
