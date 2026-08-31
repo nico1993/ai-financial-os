@@ -172,4 +172,189 @@ export class TransactionRepository {
       .sort({ date: -1 })
       .lean<TransactionDocument[]>();
   }
+
+  /** ANLY-1/ANLY-2's net worth reconstruction (ADR-0034): every
+   * non-removed, non-pending transaction for `userId` dated strictly
+   * after `afterDate`, projected down to just what
+   * rollups/recompute.ts's computeDailyBalanceSnapshot() needs to walk an
+   * account's currentBalance backward to what it was on that day. Pending
+   * is excluded deliberately -- see computeDailyBalanceSnapshot()'s own
+   * doc comment for why. Not scoped to one account: the caller needs
+   * every touched account's deltas in one pass, then groups by accountId
+   * itself (a single query beats one round trip per account). */
+  async findAccountDeltasAfter(
+    userId: string,
+    afterDate: Date,
+  ): Promise<{ accountId: string; amount: number }[]> {
+    const docs = await TransactionModel.find({
+      userId,
+      isRemoved: false,
+      pending: false,
+      date: { $gt: afterDate },
+    })
+      .sort({ date: 1 })
+      .select("accountId amount")
+      .lean<Pick<TransactionDocument, "accountId" | "amount">[]>();
+    return docs.map((doc) => ({ accountId: doc.accountId.toString(), amount: doc.amount }));
+  }
+
+  /** ANLY-1/ANLY-2's monthly cash-flow rollup (ADR-0034): every
+   * non-removed, non-transfer-matched transaction for `userId` within
+   * `range`, projected down to just the amount
+   * rollups/recompute.ts's computeMonthlyRollup() sums. `excludeFromCashFlow`
+   * is filtered with `$ne: true` rather than `false` so a transaction that
+   * predates the field's default (none exist yet, but the pattern matches
+   * TransactionRepository's own upsert-by-provider-id tolerance for
+   * partially-set legacy documents) is still excluded from cash flow,
+   * never included by an absent field reading as falsy. Pending IS
+   * included -- see computeMonthlyRollup()'s own doc comment for why. */
+  async findForCashFlow(userId: string, range: DateRange): Promise<{ amount: number }[]> {
+    const docs = await TransactionModel.find({
+      userId,
+      isRemoved: false,
+      excludeFromCashFlow: { $ne: true },
+      date: { $gte: range.start, $lte: range.end },
+    })
+      .select("amount")
+      .lean<Pick<TransactionDocument, "amount">[]>();
+    return docs.map((doc) => ({ amount: doc.amount }));
+  }
+
+  /** ANLY-5's categorical spending distribution (ARCHITECTURE.md §4.2):
+   * on-demand `$group` by `category.value`, `$sum` amount, pre-sorted
+   * descending -- cheap enough to compute per-request given the
+   * `{userId, 'category.value', date}` compound index (§3.2), unlike net
+   * worth/cash flow's write-time rollups. `amount: {$gt: 0}` keeps this a
+   * *spending* distribution (Plaid convention: positive = money leaving
+   * the account) -- an income deposit or refund contributes to neither
+   * slice. `excludeFromCashFlow` is filtered the same way
+   * findForCashFlow() does, for the same reason: an internal transfer
+   * between the user's own accounts isn't spending in any category. */
+  async getCategoryDistribution(
+    userId: string,
+    range: DateRange,
+  ): Promise<{ category: string; total: number }[]> {
+    return TransactionModel.aggregate<{ category: string; total: number }>([
+      {
+        $match: {
+          userId,
+          isRemoved: false,
+          excludeFromCashFlow: { $ne: true },
+          amount: { $gt: 0 },
+          date: { $gte: range.start, $lte: range.end },
+        },
+      },
+      { $group: { _id: "$category.value", total: { $sum: "$amount" } } },
+      { $sort: { total: -1 } },
+      { $project: { _id: 0, category: "$_id", total: 1 } },
+    ]);
+  }
+
+  /** ANLY-6's comparison-range variant of getCategoryDistribution() above:
+   * both `range` and `compareRange` computed in one `$facet` aggregation
+   * (ARCHITECTURE.md §4.2's own example) rather than two separate
+   * `$match`+`$group` round trips against the raw Transactions collection
+   * -- worth doing here specifically because Transactions is the large,
+   * unbounded-growth collection this app has (unlike MonthlyRollup, a
+   * small write-time aggregate RollupRepository.getMonthlyRollup() reads
+   * with two cheap indexed point queries instead — see ADR-0035). The
+   * outer `$match` pre-filters to the union of both ranges before the
+   * `$facet` splits, so Mongo scans the combined window once, not twice. */
+  async getCategoryDistributionComparison(
+    userId: string,
+    range: DateRange,
+    compareRange: DateRange,
+  ): Promise<{
+    current: { category: string; total: number }[];
+    compare: { category: string; total: number }[];
+  }> {
+    const overallStart =
+      range.start.getTime() <= compareRange.start.getTime() ? range.start : compareRange.start;
+    const overallEnd =
+      range.end.getTime() >= compareRange.end.getTime() ? range.end : compareRange.end;
+
+    // Explicit `as const` on every literal below: without it, TS widens
+    // `-1`/`0`/`1` to plain `number` when inferring this array literal's
+    // element type (no contextual pipeline-stage type to pin it against
+    // until it's actually passed to .aggregate()), which then fails to
+    // satisfy Mongoose's FacetPipelineStage union ($sort wants
+    // `1 | -1 | Meta`, not `number`).
+    const group = [
+      { $group: { _id: "$category.value", total: { $sum: "$amount" } } },
+      { $sort: { total: -1 as const } },
+      { $project: { _id: 0 as const, category: "$_id", total: 1 as const } },
+    ];
+
+    const [result] = await TransactionModel.aggregate<{
+      current: { category: string; total: number }[];
+      compare: { category: string; total: number }[];
+    }>([
+      {
+        $match: {
+          userId,
+          isRemoved: false,
+          excludeFromCashFlow: { $ne: true },
+          amount: { $gt: 0 },
+          date: { $gte: overallStart, $lte: overallEnd },
+        },
+      },
+      {
+        $facet: {
+          current: [{ $match: { date: { $gte: range.start, $lte: range.end } } }, ...group],
+          compare: [
+            { $match: { date: { $gte: compareRange.start, $lte: compareRange.end } } },
+            ...group,
+          ],
+        },
+      },
+    ]);
+
+    return result ?? { current: [], compare: [] };
+  }
+
+  /** ANLY-7's subscription-detection candidate pool: every non-removed,
+   * non-pending, non-transfer-matched transaction for `userId`, sorted
+   * ascending by date -- full-history scan, no date windowing, the same
+   * accepted Phase 1 simplification `findUnmatchedTransferCandidates()`
+   * documents for this app's self-hosted, single-user scale. `pending` is
+   * excluded for the same reason `findAccountDeltasAfter()` excludes it:
+   * a pending transaction's amount/date can still change, which would
+   * corrupt the interval math a merchant's later posted transaction
+   * already accounts for. `merchantName` falls back to
+   * `merchantNameNormalized` -- Plaid's cleaned name is optional on
+   * `Transaction`, but `Subscription.merchantName` is not, and the
+   * normalized key is always populated. */
+  async findSubscriptionCandidates(
+    userId: string,
+  ): Promise<
+    {
+      id: string;
+      merchantNameNormalized: string;
+      merchantName: string;
+      amount: number;
+      date: Date;
+    }[]
+  > {
+    const docs = await TransactionModel.find({
+      userId,
+      isRemoved: false,
+      pending: false,
+      excludeFromCashFlow: { $ne: true },
+    })
+      .sort({ date: 1 })
+      .select("merchantNameNormalized merchantName amount date")
+      .lean<
+        Pick<
+          TransactionDocument,
+          "_id" | "merchantNameNormalized" | "merchantName" | "amount" | "date"
+        >[]
+      >();
+    return docs.map((doc) => ({
+      id: doc._id.toString(),
+      merchantNameNormalized: doc.merchantNameNormalized,
+      merchantName: doc.merchantName ?? doc.merchantNameNormalized,
+      amount: doc.amount,
+      date: doc.date,
+    }));
+  }
 }

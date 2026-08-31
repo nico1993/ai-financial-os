@@ -1,7 +1,11 @@
 import { beforeAll, afterEach, afterAll, describe, it, expect } from "vitest";
 import mongoose from "mongoose";
 import { setupTestDb } from "../test/mongo-memory.js";
-import { TransactionRepository, type UpsertTransactionInput } from "./TransactionRepository.js";
+import {
+  TransactionRepository,
+  type DateRange,
+  type UpsertTransactionInput,
+} from "./TransactionRepository.js";
 
 const db = setupTestDb();
 const repo = new TransactionRepository();
@@ -224,5 +228,337 @@ describe("TransactionRepository", () => {
 
     const results = await repo.findUnmatchedTransferCandidates("user-1");
     expect(results.map((tx) => tx.providerTransactionId)).toEqual(["mine"]);
+  });
+
+  describe("findAccountDeltasAfter", () => {
+    const accountA = new mongoose.Types.ObjectId();
+    const accountB = new mongoose.Types.ObjectId();
+    const AFTER = new Date("2026-01-15T00:00:00.000Z");
+
+    it("only returns transactions dated strictly after the given date", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "before",
+          accountId: accountA,
+          date: new Date("2026-01-10"),
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "on-day", accountId: accountA, date: AFTER }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "after",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+          amount: 1234,
+        }),
+      );
+
+      const deltas = await repo.findAccountDeltasAfter("user-1", AFTER);
+      expect(deltas).toEqual([{ accountId: accountA.toString(), amount: 1234 }]);
+    });
+
+    it("groups nothing itself -- returns one row per transaction, across accounts", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "a1",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+          amount: 100,
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "a2",
+          accountId: accountA,
+          date: new Date("2026-01-21"),
+          amount: 200,
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "b1",
+          accountId: accountB,
+          date: new Date("2026-01-22"),
+          amount: -50,
+        }),
+      );
+
+      const deltas = await repo.findAccountDeltasAfter("user-1", AFTER);
+      expect(deltas).toHaveLength(3);
+      expect(
+        deltas.filter((d) => d.accountId === accountA.toString()).map((d) => d.amount),
+      ).toEqual([100, 200]);
+      expect(
+        deltas.filter((d) => d.accountId === accountB.toString()).map((d) => d.amount),
+      ).toEqual([-50]);
+    });
+
+    it("excludes removed transactions", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "gone",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+        }),
+      );
+      await repo.markRemoved("gone");
+
+      const deltas = await repo.findAccountDeltasAfter("user-1", AFTER);
+      expect(deltas).toEqual([]);
+    });
+
+    it("excludes pending transactions", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "still-pending",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+          pending: true,
+        }),
+      );
+
+      const deltas = await repo.findAccountDeltasAfter("user-1", AFTER);
+      expect(deltas).toEqual([]);
+    });
+
+    it("is scoped to the requesting user", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "mine",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+          userId: "user-1",
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "theirs",
+          accountId: accountA,
+          date: new Date("2026-01-20"),
+          userId: "user-2",
+        }),
+      );
+
+      const deltas = await repo.findAccountDeltasAfter("user-1", AFTER);
+      expect(deltas).toHaveLength(1);
+    });
+  });
+
+  describe("findForCashFlow", () => {
+    const JAN: DateRange = {
+      start: new Date("2026-01-01"),
+      end: new Date("2026-01-31"),
+    };
+
+    it("returns amounts for transactions within the range", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "groceries",
+          date: new Date("2026-01-10"),
+          amount: 4200,
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "paycheck",
+          date: new Date("2026-01-15"),
+          amount: -200000,
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "next-month",
+          date: new Date("2026-02-01"),
+          amount: 999,
+        }),
+      );
+
+      const rows = await repo.findForCashFlow("user-1", JAN);
+      expect(rows.map((r) => r.amount).sort((a, b) => a - b)).toEqual([-200000, 4200]);
+    });
+
+    it("excludes removed transactions", async () => {
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "gone", date: new Date("2026-01-10"), amount: 500 }),
+      );
+      await repo.markRemoved("gone");
+
+      const rows = await repo.findForCashFlow("user-1", JAN);
+      expect(rows).toEqual([]);
+    });
+
+    it("excludes transfer-matched transactions (excludeFromCashFlow: true)", async () => {
+      const matched = await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "internal-transfer",
+          date: new Date("2026-01-10"),
+          amount: 5000,
+        }),
+      );
+      await repo.applyTransferMatch([matched._id.toString()], "group-1");
+
+      const rows = await repo.findForCashFlow("user-1", JAN);
+      expect(rows).toEqual([]);
+    });
+
+    it("includes pending transactions", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "pending-charge",
+          date: new Date("2026-01-10"),
+          amount: 750,
+          pending: true,
+        }),
+      );
+
+      const rows = await repo.findForCashFlow("user-1", JAN);
+      expect(rows).toEqual([{ amount: 750 }]);
+    });
+
+    it("is scoped to the requesting user", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "mine",
+          date: new Date("2026-01-10"),
+          amount: 1,
+          userId: "user-1",
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "theirs",
+          date: new Date("2026-01-10"),
+          amount: 2,
+          userId: "user-2",
+        }),
+      );
+
+      const rows = await repo.findForCashFlow("user-1", JAN);
+      expect(rows).toEqual([{ amount: 1 }]);
+    });
+  });
+
+  describe("getCategoryDistribution", () => {
+    const JAN: DateRange = { start: new Date("2026-01-01"), end: new Date("2026-01-31") };
+
+    it("groups by category.value and sums amounts, sorted descending", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "g1",
+          date: new Date("2026-01-05"),
+          amount: 4_000,
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "g2",
+          date: new Date("2026-01-10"),
+          amount: 3_000,
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "r1",
+          date: new Date("2026-01-15"),
+          amount: 150_000,
+          category: { tier: 1, value: "Rent", status: "confirmed" },
+        }),
+      );
+
+      const distribution = await repo.getCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([
+        { category: "Rent", total: 150_000 },
+        { category: "Groceries", total: 7_000 },
+      ]);
+    });
+
+    it("excludes income (negative amounts) from a spending distribution", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "paycheck",
+          date: new Date("2026-01-01"),
+          amount: -200_000,
+          category: { tier: 1, value: "Income", status: "confirmed" },
+        }),
+      );
+      const distribution = await repo.getCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([]);
+    });
+
+    it("excludes transfer-matched transactions", async () => {
+      const matched = await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "internal",
+          date: new Date("2026-01-01"),
+          amount: 5_000,
+          category: { tier: 1, value: "Transfer", status: "confirmed" },
+        }),
+      );
+      await repo.applyTransferMatch([matched._id.toString()], "group-1");
+
+      const distribution = await repo.getCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([]);
+    });
+
+    it("is scoped to the requesting user", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "mine",
+          date: new Date("2026-01-05"),
+          amount: 1_000,
+          userId: "user-1",
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "theirs",
+          date: new Date("2026-01-05"),
+          amount: 1_000,
+          userId: "user-2",
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+
+      const distribution = await repo.getCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([{ category: "Groceries", total: 1_000 }]);
+    });
+  });
+
+  describe("getCategoryDistributionComparison", () => {
+    const JAN: DateRange = { start: new Date("2026-01-01"), end: new Date("2026-01-31") };
+    const FEB: DateRange = { start: new Date("2026-02-01"), end: new Date("2026-02-28") };
+
+    it("splits current and compare ranges via a single $facet pass", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "jan-groceries",
+          date: new Date("2026-01-05"),
+          amount: 4_000,
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "feb-groceries",
+          date: new Date("2026-02-05"),
+          amount: 6_000,
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+
+      const result = await repo.getCategoryDistributionComparison("user-1", FEB, JAN);
+      expect(result.current).toEqual([{ category: "Groceries", total: 6_000 }]);
+      expect(result.compare).toEqual([{ category: "Groceries", total: 4_000 }]);
+    });
+
+    it("returns empty facets when neither range has any matching transactions", async () => {
+      const result = await repo.getCategoryDistributionComparison("user-1", FEB, JAN);
+      expect(result).toEqual({ current: [], compare: [] });
+    });
   });
 });

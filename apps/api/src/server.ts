@@ -6,6 +6,8 @@ import { registerSession } from "./auth/session.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPlaidRoutes } from "./routes/plaid.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
+import { registerEventsRoutes } from "./routes/events.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
@@ -18,6 +20,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   await registerPlaidRoutes(app);
   // Unauthenticated by design — verified via signed JWT instead (ING-7).
   await registerWebhookRoutes(app);
+  await registerAnalyticsRoutes(app);
+  await registerEventsRoutes(app);
 
   return app;
 }

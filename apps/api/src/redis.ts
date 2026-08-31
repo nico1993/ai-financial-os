@@ -9,6 +9,7 @@ import { env } from "./env.js";
 
 let sessionClient: Redis | undefined;
 let queueClient: Redis | undefined;
+let eventsClient: Redis | undefined;
 
 /** Session storage (auth/session.ts). */
 export function getRedisClient(): Redis {
@@ -23,4 +24,17 @@ export function getRedisClient(): Redis {
 export function getQueueConnection(): Redis {
   queueClient ??= new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   return queueClient;
+}
+
+/** BullMQ `QueueEvents` connection (events/publisher.ts, ANLY-8). Its own
+ * connection for the same reason apps/worker's `createRedisConnection()`
+ * gives every Worker one: `QueueEvents` consumes via Redis Streams with
+ * blocking reads under the hood, which monopolizes whatever client it's
+ * given the same way a Worker's blocking commands do -- sharing this with
+ * `getQueueConnection()`'s producer traffic would risk one starving the
+ * other. `maxRetriesPerRequest: null` for the same BullMQ requirement as
+ * the queue connection. */
+export function getEventsConnection(): Redis {
+  eventsClient ??= new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+  return eventsClient;
 }
