@@ -1,10 +1,24 @@
 import type { ReactNode, SVGProps } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useLogoutMutation, useSessionQuery } from "../auth/session";
+import { useConfigQuery } from "../api/config";
 import { Button } from "../components/ui/button";
 import { useDashboardEvents } from "../lib/useDashboardEvents";
 import { cn } from "../lib/utils";
 
+function IconAccounts(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M3 10l9-6 9 6M4 10v9h16v-9M9 19v-6h6v6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 function IconTrend(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" {...props}>
@@ -69,8 +83,12 @@ interface NavItem {
 }
 
 // The five destinations WEB-2 actually names in BACKLOG.md, in the order
-// listed there -- nothing invented ahead of the tickets that build them.
+// listed there, plus Accounts (WEB-7) leading them -- connecting a bank
+// is the one thing that has to happen before any of the other five have
+// real data to show, so it gets first position rather than being tucked
+// away as a one-time setup step with no way back to it.
 const NAV_ITEMS: NavItem[] = [
+  { to: "/accounts", label: "Accounts", icon: IconAccounts },
   { to: "/net-worth", label: "Net worth", icon: IconTrend },
   { to: "/cash-flow", label: "Cash flow", icon: IconFlow },
   { to: "/spending", label: "Spending", icon: IconPie },
@@ -85,17 +103,30 @@ const NAV_ITEMS: NavItem[] = [
  * ANLY-10's SSE client mounts here rather than in any one page -- one
  * connection for the whole authenticated app, alive across every route
  * change, invalidating the shared `["analytics"]` query prefix no matter
- * which dashboard page happens to be showing when an event arrives. */
+ * which dashboard page happens to be showing when an event arrives.
+ *
+ * WEB-7 addition: a "Sandbox" badge next to the wordmark whenever
+ * `useConfigQuery()`'s `plaidEnv` isn't `"production"` -- deployment-wide
+ * (there's only one Plaid environment per deployment today), so it's read
+ * here once rather than by every page that might otherwise want to know. */
 export function AppShell() {
   const session = useSessionQuery();
   const logout = useLogoutMutation();
+  const config = useConfigQuery();
   const user = session.data;
   useDashboardEvents();
 
   return (
     <div className="flex min-h-screen bg-background font-sans text-ink">
       <aside className="flex w-60 flex-shrink-0 flex-col border-r border-border bg-surface-secondary p-4">
-        <div className="px-2 pb-5 pt-1.5 text-sm font-semibold tracking-tight">Financial OS</div>
+        <div className="flex items-center gap-2 px-2 pb-5 pt-1.5 text-sm font-semibold tracking-tight">
+          Financial OS
+          {config.data && config.data.plaidEnv !== "production" && (
+            <span className="rounded-full bg-accent-wash px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+              Sandbox
+            </span>
+          )}
+        </div>
 
         <nav className="flex flex-col gap-0.5">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => (

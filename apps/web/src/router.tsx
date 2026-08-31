@@ -3,6 +3,7 @@ import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { AppShell } from "./layout/AppShell";
 import LoginPage from "./pages/LoginPage";
 import { PageStub } from "./pages/PageStub";
+import AccountsPage from "./pages/AccountsPage";
 import NetWorthPage from "./pages/NetWorthPage";
 import CashFlowPage from "./pages/CashFlowPage";
 import SpendingPage from "./pages/SpendingPage";
@@ -13,7 +14,10 @@ import SubscriptionsPage from "./pages/SubscriptionsPage";
 // subscriptions, and the review queue (CAT-7). ANLY-9 replaced the four
 // analytics PageStubs with the real pages; /review stays a PageStub until
 // CAT-7 (a separate, still-unchecked ticket -- confirmed via BACKLOG.md,
-// not assumed) builds the Tier 4 review queue UI.
+// not assumed) builds the Tier 4 review queue UI. /accounts (WEB-7) is
+// new since then -- not named in WEB-2's original ticket text, added
+// once WEB-7 was scoped as its own real gap (connect-a-bank has to live
+// somewhere before net worth/cash flow/spending have anything to show).
 //
 // /login sits outside ProtectedRoute (public); everything else nests
 // under it, then under AppShell for the shared nav/header (WEB-4). "/"
@@ -29,6 +33,7 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <Navigate to="/net-worth" replace /> },
+          { path: "accounts", element: <AccountsPage /> },
           { path: "net-worth", element: <NetWorthPage /> },
           { path: "cash-flow", element: <CashFlowPage /> },
           { path: "spending", element: <SpendingPage /> },
