@@ -11,6 +11,16 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    // Bind every interface, not just the container/host loopback --
+    // Vite defaults server.host to false (localhost-only). Under
+    // docker-compose that leaves the process running but unreachable:
+    // the proxy container dials the web service by its Docker network
+    // IP (Caddyfile's `web:5173`), which a localhost-only bind refuses,
+    // surfacing as a 502 from Caddy with no hint from `web`'s own logs
+    // beyond "Network: use --host to expose". Harmless for standalone
+    // `pnpm --filter @financial-os/web dev` on the host too -- this is
+    // solo-user local dev, not a service exposed beyond the machine.
+    host: true,
     // Dev-only convenience (WEB-3, ADR-0032): the Caddyfile already
     // reverse-proxies /api + /events to apps/api for the docker-compose
     // stack, but running `pnpm --filter @financial-os/web dev` on its own
