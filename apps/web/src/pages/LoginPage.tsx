@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import { getApiErrorMessage } from "../api/client";
 import { useLoginMutation, useSessionQuery } from "../auth/session";
 import { Button } from "../components/ui/button";
@@ -75,6 +75,15 @@ export default function LoginPage() {
               {login.isPending ? "Signing in…" : "Sign in"}
             </Button>
           </form>
+          {/* AUTH-6: always shown -- there's no cheap way to know in
+              advance whether bootstrap registration is still open, and
+              the register page's own 403 handles the closed case. */}
+          <p className="mt-4 text-center text-xs text-ink-muted">
+            Setting this up for the first time?{" "}
+            <Link to="/register" className="font-medium text-ink underline underline-offset-2">
+              Create an account
+            </Link>
+          </p>
         </CardContent>
       </Card>
     </div>

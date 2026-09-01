@@ -48,6 +48,27 @@ export function useLoginMutation() {
   });
 }
 
+/** AUTH-6: posts new-account credentials to `/api/auth/register`. Same
+ * `setQueryData`-not-`invalidateQueries` shortcut as `useLoginMutation()`
+ * above, for the same reason -- `routes/auth.ts`'s register handler
+ * returns the identical `{id, email}` shape and also sets
+ * `req.session.userId` itself, so the caller is signed in the moment
+ * this resolves. The backend enforces *when* registration is allowed
+ * (bootstrap, or an already-authenticated user adding another --
+ * ADR-0018); this hook has no opinion on that, it just surfaces
+ * whatever `apiFetch` throws (a 403 "registration is closed" included)
+ * through the normal `ApiError`/`getApiErrorMessage()` path. */
+export function useRegisterMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (credentials: { email: string; password: string }) =>
+      apiFetch<AuthUser>("/api/auth/register", { method: "POST", body: credentials }),
+    onSuccess: (user) => {
+      queryClient.setQueryData(AUTH_ME_QUERY_KEY, user);
+    },
+  });
+}
+
 export function useLogoutMutation() {
   const queryClient = useQueryClient();
   return useMutation({
