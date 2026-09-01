@@ -26,9 +26,9 @@ From there, two ways to run it:
 **Workspaces directly** (fastest for day-to-day development — no Mongo/Redis/proxy):
 
 ```bash
-pnpm --filter apps/web dev
-pnpm --filter apps/api dev
-pnpm --filter apps/worker dev
+pnpm --filter @financial-os/web dev
+pnpm --filter @financial-os/api dev
+pnpm --filter @financial-os/worker dev
 ```
 
 **Full stack via Docker Compose** (matches the self-hosted deployment shape — see `ARCHITECTURE.md` §5):
