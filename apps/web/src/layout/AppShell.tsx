@@ -19,6 +19,19 @@ function IconAccounts(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+function IconLedger(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="3.5" y="4" width="17" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M7 9h10M7 13h10M7 17h6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 function IconTrend(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" {...props}>
@@ -83,12 +96,15 @@ interface NavItem {
 }
 
 // The five destinations WEB-2 actually names in BACKLOG.md, in the order
-// listed there, plus Accounts (WEB-7) leading them -- connecting a bank
-// is the one thing that has to happen before any of the other five have
-// real data to show, so it gets first position rather than being tucked
-// away as a one-time setup step with no way back to it.
+// listed there, plus Accounts (WEB-7) and Transactions (WEB-8) leading
+// them. Accounts is first -- connecting a bank is the one thing that has
+// to happen before anything else has real data to show. Transactions is
+// second, ahead of the four analytics pages, since it's the raw ledger
+// those four are aggregates OF -- someone checking "did that charge
+// actually post" wants the ledger, not a chart.
 const NAV_ITEMS: NavItem[] = [
   { to: "/accounts", label: "Accounts", icon: IconAccounts },
+  { to: "/transactions", label: "Transactions", icon: IconLedger },
   { to: "/net-worth", label: "Net worth", icon: IconTrend },
   { to: "/cash-flow", label: "Cash flow", icon: IconFlow },
   { to: "/spending", label: "Spending", icon: IconPie },
