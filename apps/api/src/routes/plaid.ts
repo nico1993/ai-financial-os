@@ -3,11 +3,22 @@
 // resolved session userId is what the Connection/Account records get
 // written against, and it's the same value passed to createLinkToken so
 // Plaid's Link session and the eventual Connection line up.
+//
+// ING-13: the exchange handler also requests an immediate provider-sync
+// job (see the comment at its call site below) -- createConnection()
+// only ever fetches accounts/balances (packages/providers/src/plaid/
+// PlaidProvider.ts), never transactions. Before this, nothing pulled
+// transaction history in until Plaid's webhook fired (disabled for local
+// dev, PLAID_WEBHOOK_URL unset) or ING-8's scheduled poll next ran (up to
+// PROVIDER_SYNC_POLL_INTERVAL_MS later) -- a freshly linked account sat
+// with a balance and zero transactions, with nothing in the UI to
+// explain why.
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AccountRepository, ConnectionRepository } from "@financial-os/db";
 import { requireAuth } from "../auth/requireAuth.js";
 import { getFinancialProvider } from "../provider.js";
+import { requestProviderSync } from "../queues.js";
 
 const exchangeSchema = z.object({
   publicToken: z.string().min(1),
@@ -57,6 +68,26 @@ export async function registerPlaidRoutes(app: FastifyInstance): Promise<void> {
         }),
       ),
     );
+
+    // ING-13: request the first sync immediately rather than leaving a
+    // newly linked account to wait on a webhook (disabled locally) or the
+    // next scheduled poll. requestProviderSync() is the same dedup'd
+    // entry point the webhook and the poll both use (queues.ts's own doc
+    // comment already anticipated "a manual re-sync from the UI" as a
+    // third caller), so this can never double up with either of them.
+    // Fire-and-forget on purpose: the sync can take multiple pages and
+    // this response shouldn't block on it, and a failure to *enqueue*
+    // here would be surprising (Redis down) -- log it, don't fail
+    // account linking over it, since the connection/accounts are already
+    // safely persisted above.
+    try {
+      await requestProviderSync(connection._id.toString());
+    } catch (err) {
+      req.log.error(
+        { err, connectionId: connection._id.toString() },
+        "[plaid] failed to queue initial sync",
+      );
+    }
 
     return reply.code(201).send({
       connectionId: connection._id.toString(),

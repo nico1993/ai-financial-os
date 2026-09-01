@@ -28,8 +28,23 @@ export class ConnectionRepository {
     return doc as ConnectionDocument;
   }
 
+  /** Returns `null` for a malformed id (mongoose's CastError) the same as
+   * a genuine no-match, rather than letting the CastError escape --
+   * ING-13's manual-sync route (`routes/accounts.ts`) is the first caller
+   * to feed this a raw, client-supplied route param; every other caller
+   * (job handlers, webhook lookups) already only ever passes a value read
+   * back out of this database, so this is strictly safer for them too,
+   * never a behavior they depended on. Same reasoning as
+   * TransactionRepository.updateCategoryForUser() (ADR-0041). */
   async findById(connectionId: string): Promise<ConnectionDocument | null> {
-    return ConnectionModel.findById(connectionId).lean<ConnectionDocument | null>();
+    try {
+      return await ConnectionModel.findById(connectionId).lean<ConnectionDocument | null>();
+    } catch (err) {
+      if (err instanceof Error && err.name === "CastError") {
+        return null;
+      }
+      throw err;
+    }
   }
 
   /** The one place `accessToken` is ever read back out — for the

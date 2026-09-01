@@ -51,6 +51,7 @@ describe("buildAccountList", () => {
       id: acct._id.toString(),
       connectionId: conn._id.toString(),
       connectionStatus: "login_required",
+      connectionLastSyncedAt: null,
       institutionName: "Chase",
       type: "depository",
       subtype: "checking",
@@ -59,6 +60,26 @@ describe("buildAccountList", () => {
       availableBalance: undefined,
       isoCurrencyCode: "USD",
     });
+  });
+
+  it("surfaces the connection's lastSyncedAt as an ISO string when it has synced", () => {
+    const syncedAt = new Date("2026-08-31T12:00:00.000Z");
+    const conn = connection({ lastSyncedAt: syncedAt });
+    const acct = account({ connectionId: conn._id });
+
+    const [item] = buildAccountList([acct], [conn]);
+
+    expect(item?.connectionLastSyncedAt).toBe(syncedAt.toISOString());
+  });
+
+  it("reports connectionLastSyncedAt as null for a connection that has never synced", () => {
+    const conn = connection();
+    const acct = account({ connectionId: conn._id });
+
+    const [item] = buildAccountList([acct], [conn]);
+
+    expect(conn.lastSyncedAt).toBeUndefined();
+    expect(item?.connectionLastSyncedAt).toBeNull();
   });
 
   it("resolves each account against its own connection when a user has several", () => {
@@ -83,12 +104,13 @@ describe("buildAccountList", () => {
     expect(items.find((i) => i.id === credit._id.toString())?.connectionStatus).toBe("error");
   });
 
-  it('falls back to "error" when an account\'s connectionId matches nothing passed in', () => {
+  it('falls back to "error"/null when an account\'s connectionId matches nothing passed in', () => {
     const orphan = account({ connectionId: new mongoose.Types.ObjectId() });
 
     const [item] = buildAccountList([orphan], []);
 
     expect(item?.connectionStatus).toBe("error");
+    expect(item?.connectionLastSyncedAt).toBeNull();
   });
 
   it("sorts by institution name first", () => {
