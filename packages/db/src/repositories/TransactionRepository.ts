@@ -1,6 +1,10 @@
 // TransactionRepository — every persistence operation on Transaction goes
 // through here (ADR-0005).
-import { TransactionModel, type TransactionDocument } from "../models/Transaction.js";
+import {
+  TransactionModel,
+  type CategoryStatus,
+  type TransactionDocument,
+} from "../models/Transaction.js";
 
 export type UpsertTransactionInput = Pick<
   TransactionDocument,
@@ -31,6 +35,24 @@ export type UpsertTransactionInput = Pick<
 export interface DateRange {
   start: Date;
   end: Date;
+}
+
+/** WEB-8's general ledger page + CAT-7's Tier 4 review queue -- both are
+ * "a page of this user's transactions, optionally narrowed by
+ * category.status" (BACKLOG.md's own CAT-7 rescoping already names
+ * `GET /api/transactions?status=needs_review` as the mechanism), so one
+ * options shape and one repository method serve both rather than CAT-7
+ * needing a second, near-duplicate query later. */
+export interface TransactionPageOptions {
+  /** 1-based. */
+  page: number;
+  pageSize: number;
+  status?: CategoryStatus;
+}
+
+export interface TransactionPage {
+  items: TransactionDocument[];
+  hasMore: boolean;
 }
 
 /** Tier 2's fuzzy-match candidate shape (apps/worker/src/categorize/tier2.ts's
@@ -96,6 +118,35 @@ export class TransactionRepository {
       .lean<TransactionDocument[]>();
   }
 
+  /** WEB-8: every non-removed transaction for `userId`, most recent
+   * first, sliced to `pageSize` rows starting at `page` -- offset
+   * pagination, not a cursor, matching this app's general "the simplest
+   * thing that works at single-user scale" posture elsewhere
+   * (findUnmatchedTransferCandidates() et al.'s accepted full-history-scan
+   * simplification). Fetches `pageSize + 1` rows and slices rather than
+   * running a separate `countDocuments()` -- cheaper, and a raw total
+   * isn't needed for anything here beyond "is there a next page."
+   *
+   * `status`, when given, narrows to `category.status` -- this is what
+   * lets CAT-7's review queue reuse this exact method (`status:
+   * "needs_review"`) instead of a second one. */
+  async findPageForUser(userId: string, options: TransactionPageOptions): Promise<TransactionPage> {
+    const { page, pageSize, status } = options;
+    const skip = (page - 1) * pageSize;
+    const docs = await TransactionModel.find({
+      userId,
+      isRemoved: false,
+      ...(status ? { "category.status": status } : {}),
+    })
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(pageSize + 1)
+      .lean<TransactionDocument[]>();
+
+    const hasMore = docs.length > pageSize;
+    return { items: hasMore ? docs.slice(0, pageSize) : docs, hasMore };
+  }
+
   /** The Tier 4 review queue (ARCHITECTURE.md §2.3). */
   async findNeedsReview(userId: string): Promise<TransactionDocument[]> {
     return TransactionModel.find({ userId, "category.status": "needs_review", isRemoved: false })
@@ -137,6 +188,46 @@ export class TransactionRepository {
     category: TransactionDocument["category"],
   ): Promise<void> {
     await TransactionModel.updateOne({ _id: transactionId }, { $set: { category } });
+  }
+
+  /** CAT-7's manual correction: scoped to (transactionId, userId) together
+   * so one user can never correct another's transaction via a guessed id
+   * -- the same ownership check CategoryRepository.updateColor() already
+   * established for CAT-10. Returns the updated document (the route needs
+   * `merchantNameNormalized` back off it for the write-back call) or null
+   * on no match.
+   *
+   * Deliberately a NEW method rather than adding a `userId` parameter to
+   * updateCategory() above -- every existing caller of that method
+   * (categorizeLlm.ts, syncConnection.ts, transferMatching.ts) runs inside
+   * a worker job with no authenticated user to scope against, and already
+   * trusts the transactionId it was handed (ADR-0025's "work list from
+   * the database" jobs, not a request from an untrusted caller). */
+  async updateCategoryForUser(
+    userId: string,
+    transactionId: string,
+    category: TransactionDocument["category"],
+  ): Promise<TransactionDocument | null> {
+    try {
+      return await TransactionModel.findOneAndUpdate(
+        { _id: transactionId, userId },
+        { $set: { category } },
+        { new: true },
+      ).lean<TransactionDocument | null>();
+    } catch (err) {
+      // `transactionId` here is a client-supplied route param (CAT-7's
+      // PATCH /api/transactions/:id/category is the first route in this
+      // app to feed a raw client string into a Mongo `_id` filter) --
+      // mongoose throws a CastError for anything that isn't a valid
+      // ObjectId shape rather than just not matching. Treated the same
+      // as a genuine no-match: the caller can't tell "malformed id" from
+      // "no such transaction" apart anyway, and shouldn't have to --
+      // both correctly become a 404, not a 500 with a stack trace.
+      if (err instanceof Error && err.name === "CastError") {
+        return null;
+      }
+      throw err;
+    }
   }
 
   /** Links both sides of a matched transfer (ARCHITECTURE.md §2.4, XFER-3). */
@@ -324,9 +415,7 @@ export class TransactionRepository {
    * `merchantNameNormalized` -- Plaid's cleaned name is optional on
    * `Transaction`, but `Subscription.merchantName` is not, and the
    * normalized key is always populated. */
-  async findSubscriptionCandidates(
-    userId: string,
-  ): Promise<
+  async findSubscriptionCandidates(userId: string): Promise<
     {
       id: string;
       merchantNameNormalized: string;
