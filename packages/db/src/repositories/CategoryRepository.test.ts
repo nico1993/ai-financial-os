@@ -48,7 +48,7 @@ describe("CategoryRepository", () => {
     it("never overwrites a category the user already changed", async () => {
       await repo.seedDefaults("user-1", SEEDS);
       const [groceries] = await repo.findActiveByUser("user-1");
-      await repo.updateColor("user-1", groceries!._id.toString(), "#ff00ff");
+      await repo.update("user-1", groceries!._id.toString(), { color: "#ff00ff" });
 
       // Re-seeding (e.g. the next categorize-llm run's cache-miss path)
       // must not reset the color the user just picked.
@@ -57,6 +57,36 @@ describe("CategoryRepository", () => {
       const results = await repo.findActiveByUser("user-1");
       const recolored = results.find((c) => c.name === "Groceries");
       expect(recolored?.color).toBe("#ff00ff");
+    });
+
+    it("seeds an icon when the seed list provides one (CAT-11)", async () => {
+      await repo.seedDefaults("user-1", [
+        { name: "Groceries", color: "#2a78d6", icon: "shopping-cart" },
+      ]);
+
+      const [groceries] = await repo.findActiveByUser("user-1");
+      expect(groceries?.icon).toBe("shopping-cart");
+    });
+
+    it("leaves icon unset when the seed doesn't provide one", async () => {
+      await repo.seedDefaults("user-1", SEEDS);
+
+      const [groceries] = await repo.findActiveByUser("user-1");
+      expect(groceries?.icon).toBeUndefined();
+    });
+
+    it("seeds a kind when the seed list provides one (CAT-16, the Income seed)", async () => {
+      await repo.seedDefaults("user-1", [{ name: "Income", color: "#e34948", kind: "income" }]);
+
+      const [income] = await repo.findActiveByUser("user-1");
+      expect(income?.kind).toBe("income");
+    });
+
+    it("leaves kind unset (not defaulted) when the seed doesn't provide one -- CAT-16's own doc comment: seedDefaults() is a real insert, so this documents what actually lands via $setOnInsert's conditional spread, not what the schema *could* default", async () => {
+      await repo.seedDefaults("user-1", SEEDS);
+
+      const [groceries] = await repo.findActiveByUser("user-1");
+      expect(groceries?.kind).toBeUndefined();
     });
 
     it("does not duplicate a custom category that shares a default's name", async () => {
@@ -98,22 +128,101 @@ describe("CategoryRepository", () => {
     });
   });
 
-  describe("updateColor", () => {
-    it("updates the color of a category the user owns", async () => {
+  describe("create", () => {
+    it("stores an icon when given one (CAT-11)", async () => {
+      const created = await repo.create("user-1", "Side Hustle", "#008300", "briefcase");
+      expect(created.icon).toBe("briefcase");
+    });
+
+    it("leaves icon unset when not given one", async () => {
+      const created = await repo.create("user-1", "Side Hustle", "#008300");
+      expect(created.icon).toBeUndefined();
+    });
+
+    it("stores a kind when given one (CAT-16)", async () => {
+      const created = await repo.create("user-1", "Freelance", "#008300", "briefcase", "income");
+      expect(created.kind).toBe("income");
+    });
+
+    it("applies the schema's 'expense' default when kind isn't given -- unlike a .lean() read of a pre-existing row, this IS a real Document creation (CategoryModel.create()), so the schema default genuinely lands in the DB, not just undefined", async () => {
+      const created = await repo.create("user-1", "Side Hustle", "#008300");
+      expect(created.kind).toBe("expense");
+    });
+  });
+
+  describe("update", () => {
+    it("updates just the color of a category the user owns", async () => {
       const created = await repo.create("user-1", "Groceries", "#2a78d6");
-      const updated = await repo.updateColor("user-1", created._id.toString(), "#ff00ff");
+      const updated = await repo.update("user-1", created._id.toString(), { color: "#ff00ff" });
       expect(updated?.color).toBe("#ff00ff");
+      expect(updated?.icon).toBeUndefined();
+    });
+
+    it("updates just the icon, leaving color untouched (CAT-11)", async () => {
+      const created = await repo.create("user-1", "Groceries", "#2a78d6");
+      const updated = await repo.update("user-1", created._id.toString(), {
+        icon: "shopping-cart",
+      });
+      expect(updated?.icon).toBe("shopping-cart");
+      expect(updated?.color).toBe("#2a78d6");
+    });
+
+    it("updates both color and icon together", async () => {
+      const created = await repo.create("user-1", "Groceries", "#2a78d6");
+      const updated = await repo.update("user-1", created._id.toString(), {
+        color: "#ff00ff",
+        icon: "shopping-cart",
+      });
+      expect(updated?.color).toBe("#ff00ff");
+      expect(updated?.icon).toBe("shopping-cart");
     });
 
     it("returns null for a category owned by a different user", async () => {
       const created = await repo.create("user-1", "Groceries", "#2a78d6");
-      const result = await repo.updateColor("user-2", created._id.toString(), "#ff00ff");
+      const result = await repo.update("user-2", created._id.toString(), { color: "#ff00ff" });
       expect(result).toBeNull();
 
       // Confirm it genuinely wasn't touched, not just that the return
       // value looked right.
       const [unchanged] = await repo.findActiveByUser("user-1");
       expect(unchanged?.color).toBe("#2a78d6");
+    });
+
+    it("updates just the kind, leaving color/icon untouched (CAT-16)", async () => {
+      const created = await repo.create("user-1", "Groceries", "#2a78d6", "shopping-cart");
+      const updated = await repo.update("user-1", created._id.toString(), { kind: "income" });
+      expect(updated?.kind).toBe("income");
+      expect(updated?.color).toBe("#2a78d6");
+      expect(updated?.icon).toBe("shopping-cart");
+    });
+
+    it("returns null (not a thrown CastError) for a malformed id -- CAT-16's own doc comment on why update() now guards this, since PATCH /api/categories/:id is its first caller to feed it a raw client string", async () => {
+      const result = await repo.update("user-1", "not-a-valid-object-id", { color: "#ff00ff" });
+      expect(result).toBeNull();
+    });
+
+    it("re-kinds an already-seeded default whose row predates CAT-16 -- the exact 'stuck as undefined until re-saved' gap Category.kind's doc comment flags, fixed by this same update() path", async () => {
+      // Simulate a pre-CAT-16 row: created before `kind` existed, so it
+      // genuinely has no `kind` field stored (not even the schema
+      // default -- CategoryModel.create() would apply that, so this
+      // bypasses the repository and inserts directly, the way a real
+      // row from before this migration actually looks in the DB).
+      const { CategoryModel } = await import("../models/Category.js");
+      const preExisting = await CategoryModel.create({
+        userId: "user-1",
+        name: "Income",
+        color: "#e34948",
+        isDefault: true,
+        archived: false,
+      });
+      // Confirm the premise: a lean read genuinely sees kind: undefined,
+      // not the schema's "expense" default -- Mongoose does not backfill
+      // schema defaults on .lean() reads of a pre-existing document.
+      const [before] = await repo.findActiveByUser("user-1");
+      expect(before?.kind).toBeUndefined();
+
+      const updated = await repo.update("user-1", preExisting._id.toString(), { kind: "income" });
+      expect(updated?.kind).toBe("income");
     });
   });
 });

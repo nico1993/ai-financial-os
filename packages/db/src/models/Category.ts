@@ -13,6 +13,8 @@
 // points at.
 import mongoose, { Schema, model, type Model } from "mongoose";
 
+export type CategoryKind = "income" | "expense";
+
 export interface CategoryDocument {
   _id: mongoose.Types.ObjectId;
   userId: string;
@@ -23,6 +25,40 @@ export interface CategoryDocument {
    * (CAT-10): this is a user-visible identity color, not a fixed taxonomy
    * property. */
   color: string;
+  /** CAT-11: an icon key from apps/web's curated, fixed lucide-react set
+   * (e.g. "shopping-cart") -- same shape as `color`: a string identifier
+   * this layer stores and doesn't interpret, resolved to an actual icon
+   * component at render time by the frontend. Optional rather than
+   * required like `color` is: a category created before this field
+   * existed (or a custom one a user creates without picking one) simply
+   * has no icon, and the frontend falls back to a generic default rather
+   * than this needing a migration for every pre-existing row. */
+  icon?: string;
+  /** CAT-16: "income" or "expense", for the /categories management
+   * page's Income/Expense grouping of the seeded defaults (isDefault:
+   * true -- a user's own custom category always shows under "Custom"
+   * regardless of its kind; see CategoriesPage.tsx's own comment for the
+   * full grouping rule). Required with a schema-level default
+   * ("expense") rather than optional like `icon` -- but that default
+   * only actually applies to a row's stored value at *write* time
+   * (CategoryModel.create() hydrates a real Document, which does apply
+   * schema defaults for an omitted path); a row written before this
+   * field existed has no `kind` physically stored, and Mongoose does
+   * NOT backfill schema defaults for `.lean()` reads (every read in this
+   * repository is `.lean()`) -- so `kind` really is optional at the type
+   * level here (`kind?: CategoryKind`) despite being `required` in the
+   * schema below, the same honesty gap `icon`'s own optional typing
+   * documents. A pre-CAT-16 row (including an already-seeded "Income"
+   * category from before this shipped -- seedDefaults()'s
+   * $setOnInsert never touches an existing row) reads back as
+   * `kind: undefined` until it's re-saved through `update()`; callers
+   * that need a concrete "income" | "expense" (routes/categories.ts's
+   * GET response, CategoriesPage's grouping) normalize with
+   * `?? "expense"` rather than trusting the schema default to have
+   * already done it. No migration script for the same reason `icon`
+   * needed none: every *new* write (seedDefaults, create) stores a real
+   * value going forward. */
+  kind?: CategoryKind;
   /** True for a row CategoryRepository.seedDefaults() created, false for
    * one a user added themselves. Provenance only -- both are equally
    * rename/recolor/archive-able; nothing branches on this to restrict what
@@ -42,6 +78,8 @@ const categorySchema = new Schema<CategoryDocument>(
     userId: { type: String, required: true },
     name: { type: String, required: true },
     color: { type: String, required: true },
+    icon: { type: String },
+    kind: { type: String, enum: ["income", "expense"], required: true, default: "expense" },
     isDefault: { type: Boolean, required: true, default: false },
     archived: { type: Boolean, required: true, default: false },
   },

@@ -30,28 +30,48 @@
 export interface DefaultCategorySeed {
   readonly name: string;
   readonly color: string;
+  /** CAT-11: a lucide-react icon key from apps/web's curated, fixed set
+   * (apps/web/src/design/categoryIcons.tsx -- duplicated here rather than
+   * imported, the same "each app defines the same small constant list
+   * independently" precedent CATEGORICAL_PALETTE above already
+   * establishes between this file and apps/web/src/design/tokens.ts,
+   * since apps/worker has no dependency on apps/web either way). */
+  readonly icon: string;
+  /** CAT-16: "income" | "expense", for the /categories management page's
+   * grouping of the seeded defaults (packages/db's CategoryRepository.
+   * seedDefaults() carries it through when present -- see that field's
+   * own doc comment on CategorySeed). Optional, and only set below on
+   * "Income" -- every other entry, "Transfer" and "Uncategorized"
+   * included, has no clean income/expense answer (a transfer is neither,
+   * and "uncategorized" is a non-answer), so they're left to fall
+   * through to the schema's own "expense" default rather than this file
+   * inventing a third bucket the schema doesn't have. Worth a second
+   * look, not silently decided: Transfer/Uncategorized landing in
+   * "Expense" by omission is a judgment call, not a considered "these
+   * are expenses." */
+  readonly kind?: "income" | "expense";
 }
 
 export const DEFAULT_CATEGORY_SEEDS: readonly DefaultCategorySeed[] = [
-  { name: "Groceries", color: "#2a78d6" },
-  { name: "Dining", color: "#eb6834" },
-  { name: "Transportation", color: "#1baf7a" },
-  { name: "Shopping", color: "#eda100" },
-  { name: "Entertainment", color: "#e87ba4" },
-  { name: "Bills & Utilities", color: "#008300" },
-  { name: "Rent & Housing", color: "#4a3aa7" },
-  { name: "Health & Fitness", color: "#e34948" },
-  { name: "Travel", color: "#2a78d6" },
-  { name: "Subscriptions", color: "#eb6834" },
-  { name: "Insurance", color: "#1baf7a" },
-  { name: "Education", color: "#eda100" },
-  { name: "Personal Care", color: "#e87ba4" },
-  { name: "Gifts & Donations", color: "#008300" },
-  { name: "Fees & Charges", color: "#4a3aa7" },
-  { name: "Income", color: "#e34948" },
-  { name: "Transfer", color: "#2a78d6" },
+  { name: "Groceries", color: "#2a78d6", icon: "shopping-cart" },
+  { name: "Dining", color: "#eb6834", icon: "utensils" },
+  { name: "Transportation", color: "#1baf7a", icon: "car" },
+  { name: "Shopping", color: "#eda100", icon: "shopping-bag" },
+  { name: "Entertainment", color: "#e87ba4", icon: "clapperboard" },
+  { name: "Bills & Utilities", color: "#008300", icon: "receipt" },
+  { name: "Rent & Housing", color: "#4a3aa7", icon: "home" },
+  { name: "Health & Fitness", color: "#e34948", icon: "heart-pulse" },
+  { name: "Travel", color: "#2a78d6", icon: "plane" },
+  { name: "Subscriptions", color: "#eb6834", icon: "repeat" },
+  { name: "Insurance", color: "#1baf7a", icon: "shield" },
+  { name: "Education", color: "#eda100", icon: "graduation-cap" },
+  { name: "Personal Care", color: "#e87ba4", icon: "sparkles" },
+  { name: "Gifts & Donations", color: "#008300", icon: "gift" },
+  { name: "Fees & Charges", color: "#4a3aa7", icon: "banknote" },
+  { name: "Income", color: "#e34948", icon: "trending-up", kind: "income" },
+  { name: "Transfer", color: "#2a78d6", icon: "arrow-left-right" },
   // See the file comment above -- deliberately not a categorical hue.
-  { name: "Uncategorized", color: "#898781" },
+  { name: "Uncategorized", color: "#898781", icon: "circle-help" },
 ] as const;
 
 /** Name-only projection of the seed list -- test-categorization.ts (CAT-4/5's
