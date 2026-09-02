@@ -40,6 +40,13 @@ export interface TransactionsQueryOptions {
   pageSize?: number;
   /** CAT-7's review-queue filter -- omit for the plain ledger view. */
   status?: TransactionCategoryStatus;
+  /** WEB-10: an inclusive date-range filter, "YYYY-MM-DD" (the same
+   * string shape DateRangeControls/lib/dateRange.ts already use). */
+  dateFrom?: string;
+  dateTo?: string;
+  /** WEB-10: exact category name -- what ANLY-14's Spending-page
+   * drill-down links here with. */
+  category?: string;
 }
 
 // Not under the ["analytics"] prefix ANLY-10's SSE client invalidates --
@@ -50,13 +57,24 @@ export interface TransactionsQueryOptions {
 // invalidates ["accounts"]), not something a dashboard-changed event has
 // any business also triggering.
 export function useTransactionsQuery(options: TransactionsQueryOptions) {
-  const { page, pageSize, status } = options;
+  const { page, pageSize, status, dateFrom, dateTo, category } = options;
   return useQuery({
-    queryKey: ["transactions", page, pageSize ?? null, status ?? null],
+    queryKey: [
+      "transactions",
+      page,
+      pageSize ?? null,
+      status ?? null,
+      dateFrom ?? null,
+      dateTo ?? null,
+      category ?? null,
+    ],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page) });
       if (pageSize) params.set("pageSize", String(pageSize));
       if (status) params.set("status", status);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      if (category) params.set("category", category);
       return apiFetch<TransactionsPageResponse>(`/api/transactions?${params.toString()}`);
     },
     // Keeps the current page's rows on screen while the next page loads,
@@ -66,20 +84,32 @@ export function useTransactionsQuery(options: TransactionsQueryOptions) {
   });
 }
 
-// -- CAT-7: manual category correction ------------------------------------
+// -- CAT-7 / CAT-13: manual correction (category and/or merchant name) ----
+//
+// Both hooks below PATCH the same route, `/api/transactions/:id`
+// (routes/transactions.ts) -- CAT-13 broadened CAT-7's original
+// `/category`-suffixed route to also accept `merchantNameOverride`
+// rather than adding a second endpoint. Kept as two separate hooks
+// (not one generic "update transaction" hook) since their call sites
+// (ReviewCategoryControl.tsx, TransactionsTable.tsx's inline merchant
+// editor) each only ever set one field and want their own narrow input
+// type, not an object where the other field happens to be undefined.
+
+export interface TransactionUpdateResult {
+  id: string;
+  category: {
+    value: string;
+    status: TransactionCategoryStatus;
+  };
+  merchantName: string;
+}
 
 export interface CorrectCategoryInput {
   transactionId: string;
   category: string;
 }
 
-export interface CorrectCategoryResult {
-  id: string;
-  category: {
-    value: string;
-    status: TransactionCategoryStatus;
-  };
-}
+export type CorrectCategoryResult = TransactionUpdateResult;
 
 /** A manual correction always writes `status: "confirmed"` (the API
  * enforces this server-side; there's no "needs_review" outcome for a
@@ -98,13 +128,42 @@ export function useCorrectCategoryMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ transactionId, category }: CorrectCategoryInput) =>
-      apiFetch<CorrectCategoryResult>(`/api/transactions/${transactionId}/category`, {
+      apiFetch<CorrectCategoryResult>(`/api/transactions/${transactionId}`, {
         method: "PATCH",
         body: { category },
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["transactions"] });
       void queryClient.invalidateQueries({ queryKey: ["analytics", "spending-categories"] });
+    },
+  });
+}
+
+// -- CAT-13: editable merchant display name --------------------------------
+
+export interface SetMerchantNameOverrideInput {
+  transactionId: string;
+  /** Empty string clears the override back to
+   * `merchantName ?? merchantNameNormalized` -- the same
+   * clear-via-empty-string convention the API itself uses. */
+  merchantNameOverride: string;
+}
+
+/** Only invalidates `["transactions"]` -- unlike a category correction,
+ * renaming a merchant doesn't change which query results a transaction
+ * belongs to (no status/category filter reads merchant name), and it has
+ * no bearing on `["analytics", "spending-categories"]`, which groups by
+ * category, not display name. */
+export function useSetMerchantNameOverrideMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ transactionId, merchantNameOverride }: SetMerchantNameOverrideInput) =>
+      apiFetch<TransactionUpdateResult>(`/api/transactions/${transactionId}`, {
+        method: "PATCH",
+        body: { merchantNameOverride },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["transactions"] });
     },
   });
 }

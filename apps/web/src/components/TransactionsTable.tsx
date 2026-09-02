@@ -6,14 +6,95 @@
 // needs_review") has something concrete to import rather than a
 // copy-pasted table.
 //
-// Deliberately dumb: takes `items` and renders them, no query/pagination
-// awareness of its own -- TransactionsPage owns fetching and paging,
-// CAT-7's review queue is expected to own its own fetch (status:
-// "needs_review") and pass the results through here the same way.
+// Deliberately dumb about fetching/paging -- TransactionsPage owns that,
+// CAT-7's review queue owns its own fetch (status: "needs_review") and
+// passes results through here the same way. NOT dumb about merchant-name
+// editing, though (CAT-13): every place this table renders benefits from
+// being able to rename a merchant inline, so that control lives here
+// rather than being threaded through as a second `renderRowAction`-style
+// slot every caller would have to wire up identically. CAT-12's future
+// edit popup is expected to fold this back into a single "click the row"
+// affordance -- this is the standalone stand-in until that lands.
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { TransactionListItem } from "../api/transactions";
+import { useSetMerchantNameOverrideMutation } from "../api/transactions";
 import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
 import { formatCents } from "../lib/money";
+
+/** CAT-13: click-to-edit merchant name. Enter/blur saves, Escape cancels;
+ * an empty save clears the override back to
+ * `merchantName ?? merchantNameNormalized` (the API's own
+ * empty-string-clears convention). */
+function MerchantCell({ item }: { item: TransactionListItem }) {
+  const setOverride = useSetMerchantNameOverrideMutation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.merchantName);
+
+  function startEditing(): void {
+    setDraft(item.merchantName);
+    setEditing(true);
+  }
+
+  function save(): void {
+    const trimmed = draft.trim();
+    if (trimmed !== item.merchantName) {
+      setOverride.mutate({ transactionId: item.id, merchantNameOverride: trimmed });
+    }
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <Input
+        autoFocus
+        className="h-7 w-40 text-xs"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onBlur={save}
+        aria-label={`Merchant name for ${item.merchantName}`}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="group inline-flex items-center gap-1.5 text-left text-ink"
+      onClick={startEditing}
+      title="Click to rename this merchant"
+    >
+      {item.merchantName}
+      {item.pending && (
+        <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+          Pending
+        </span>
+      )}
+      <span className="text-[11px] font-normal text-ink-muted underline decoration-dotted opacity-0 group-hover:opacity-100">
+        Rename
+      </span>
+    </button>
+  );
+}
+
+// WEB-12: Plaid's raw sign (amount > 0 = expense, amount < 0 = income --
+// WEB-9's convention, untouched) is correct for the *color* below, but
+// pairing that with formatCents(item.amount)'s raw signed digits was
+// backwards from how every consumer finance app actually displays an
+// amount: an expense should carry the minus sign, income should not.
+// This only flips what's rendered as text -- item.amount itself, and
+// every other reader of Transaction.amount (matching.ts, ANLY-5's
+// spending filter, the color class two lines below), keeps using
+// Plaid's real signed value untouched.
+function formatAmountDisplay(amount: number): string {
+  if (amount === 0) return formatCents(0);
+  return amount > 0 ? `-${formatCents(Math.abs(amount))}` : formatCents(Math.abs(amount));
+}
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -52,12 +133,7 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
                 {DATE_FORMAT.format(new Date(item.date))}
               </td>
               <td className="px-2 py-2 text-ink">
-                {item.merchantName}
-                {item.pending && (
-                  <span className="ml-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-muted">
-                    Pending
-                  </span>
-                )}
+                <MerchantCell item={item} />
               </td>
               <td className="px-2 py-2 text-ink-secondary">
                 {item.account.institutionName}
@@ -74,8 +150,21 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
                 )}
               </td>
               {renderRowAction && <td className="px-2 py-2">{renderRowAction(item)}</td>}
-              <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-ink">
-                {formatCents(item.amount)}
+              {/* WEB-9: Plaid's sign convention, not the intuitive one -- positive
+                  amount = money leaving the account (an expense, red), negative =
+                  money in (income/a credit, green). Same convention ANLY-5's
+                  `amount > 0` spending filter and matching.ts's doc comment already
+                  rely on -- getting this backwards here would contradict both. */}
+              <td
+                className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
+                  item.amount > 0
+                    ? "text-critical-text"
+                    : item.amount < 0
+                      ? "text-good-text"
+                      : "text-ink"
+                }`}
+              >
+                {formatAmountDisplay(item.amount)}
               </td>
             </tr>
           ))}
