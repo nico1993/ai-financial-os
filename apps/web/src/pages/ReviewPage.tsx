@@ -8,6 +8,10 @@
 // "needs_review"` is the only difference from TransactionsPage.tsx) and
 // only adds `renderRowAction`, exactly what BACKLOG.md's CAT-7 rescoping
 // asked for ("reuse WEB-8's transaction-row component and list page").
+//
+// CAT-16: the "+ Add category" affordance (AddCategoryForm, CAT-14) that
+// used to live in this page's header has moved to the new
+// pages/CategoriesPage.tsx -- see that component's own comment for why.
 import { useState } from "react";
 import { useTransactionsQuery } from "../api/transactions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";

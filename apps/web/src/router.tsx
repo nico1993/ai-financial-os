@@ -10,6 +10,7 @@ import CashFlowPage from "./pages/CashFlowPage";
 import SpendingPage from "./pages/SpendingPage";
 import SubscriptionsPage from "./pages/SubscriptionsPage";
 import ReviewPage from "./pages/ReviewPage";
+import CategoriesPage from "./pages/CategoriesPage";
 
 // WEB-2's route table -- every page BACKLOG.md names for this epic:
 // login (AUTH-5), net worth, cash flow, spending categories,
@@ -48,6 +49,11 @@ export const router = createBrowserRouter([
           { path: "spending", element: <SpendingPage /> },
           { path: "subscriptions", element: <SubscriptionsPage /> },
           { path: "review", element: <ReviewPage /> },
+          // CAT-16: the /categories management page -- three grouped
+          // sections (Custom/Income/Expense) plus "Add category",
+          // relocated off ReviewPage.tsx (see CategoriesPage.tsx's own
+          // comment).
+          { path: "categories", element: <CategoriesPage /> },
           { path: "*", element: <Navigate to="/net-worth" replace /> },
         ],
       },

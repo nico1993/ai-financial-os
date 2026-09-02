@@ -88,6 +88,24 @@ function IconFlag(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+// CAT-16: /categories's nav icon -- a tag, matching the curated icon set
+// design/categoryIcons.tsx already uses "tag" as the fallback/default
+// category icon, so this keeps the same visual vocabulary at the nav
+// level, hand-drawn to match every other icon in this file rather than
+// pulling in lucide-react's own Tag component for one nav item.
+function IconTag(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M11.5 3.5H5a1.5 1.5 0 0 0-1.5 1.5v6.5a1.5 1.5 0 0 0 .44 1.06l8.5 8.5a1.5 1.5 0 0 0 2.12 0l6.5-6.5a1.5 1.5 0 0 0 0-2.12l-8.5-8.5a1.5 1.5 0 0 0-1.06-.44Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="8.25" cy="8.25" r="1.25" fill="currentColor" />
+    </svg>
+  );
+}
 
 interface NavItem {
   to: string;
@@ -97,11 +115,13 @@ interface NavItem {
 
 // The five destinations WEB-2 actually names in BACKLOG.md, in the order
 // listed there, plus Accounts (WEB-7) and Transactions (WEB-8) leading
-// them. Accounts is first -- connecting a bank is the one thing that has
-// to happen before anything else has real data to show. Transactions is
-// second, ahead of the four analytics pages, since it's the raw ledger
-// those four are aggregates OF -- someone checking "did that charge
-// actually post" wants the ledger, not a chart.
+// them, and Categories (CAT-16) trailing them. Accounts is first --
+// connecting a bank is the one thing that has to happen before anything
+// else has real data to show. Transactions is second, ahead of the four
+// analytics pages, since it's the raw ledger those four are aggregates
+// OF -- someone checking "did that charge actually post" wants the
+// ledger, not a chart. Categories is last -- see its own item's comment
+// below for why.
 const NAV_ITEMS: NavItem[] = [
   { to: "/accounts", label: "Accounts", icon: IconAccounts },
   { to: "/transactions", label: "Transactions", icon: IconLedger },
@@ -110,6 +130,11 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/spending", label: "Spending", icon: IconPie },
   { to: "/subscriptions", label: "Subscriptions", icon: IconCalendar },
   { to: "/review", label: "Needs review", icon: IconFlag },
+  // CAT-16: /categories, last -- category management is something a
+  // user reaches for occasionally, not a daily-use destination the way
+  // the ledger/review queue above it are, so it sits at the end of the
+  // list rather than competing with those for the top slots.
+  { to: "/categories", label: "Categories", icon: IconTag },
 ];
 
 /** WEB-4's base layout: sidebar nav + header, `<Outlet/>` for the routed
