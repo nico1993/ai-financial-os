@@ -54,7 +54,12 @@ export function buildTransactionList(
     return {
       id: transaction._id.toString(),
       date: transaction.date.toISOString(),
-      merchantName: transaction.merchantName ?? transaction.merchantNameNormalized,
+      // CAT-13: a user-set override wins the existing
+      // merchantName ?? merchantNameNormalized fallback.
+      merchantName:
+        transaction.merchantNameOverride ??
+        transaction.merchantName ??
+        transaction.merchantNameNormalized,
       amount: transaction.amount,
       isoCurrencyCode: transaction.isoCurrencyCode,
       pending: transaction.pending,

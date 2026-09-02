@@ -48,6 +48,16 @@ export interface TransactionPageOptions {
   page: number;
   pageSize: number;
   status?: CategoryStatus;
+  /** WEB-10: an inclusive `date` window -- mirrors how the `ANLY` read
+   * endpoints already take a `range` (ARCHITECTURE.md §4.2), reusing the
+   * same `{userId, date: -1}` index this method's own doc comment
+   * already cites. Either bound alone is valid (an open-ended "from X
+   * onward"/"through Y" filter), not just the pair together. */
+  dateFrom?: Date;
+  dateTo?: Date;
+  /** WEB-10: exact match against `category.value` -- what
+   * ANLY-14's Spending-page drill-down links to. */
+  category?: string;
 }
 
 export interface TransactionPage {
@@ -131,12 +141,19 @@ export class TransactionRepository {
    * lets CAT-7's review queue reuse this exact method (`status:
    * "needs_review"`) instead of a second one. */
   async findPageForUser(userId: string, options: TransactionPageOptions): Promise<TransactionPage> {
-    const { page, pageSize, status } = options;
+    const { page, pageSize, status, category, dateFrom, dateTo } = options;
     const skip = (page - 1) * pageSize;
+
+    const dateFilter: { $gte?: Date; $lte?: Date } = {};
+    if (dateFrom) dateFilter.$gte = dateFrom;
+    if (dateTo) dateFilter.$lte = dateTo;
+
     const docs = await TransactionModel.find({
       userId,
       isRemoved: false,
       ...(status ? { "category.status": status } : {}),
+      ...(category ? { "category.value": category } : {}),
+      ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
     })
       .sort({ date: -1 })
       .skip(skip)
@@ -192,7 +209,7 @@ export class TransactionRepository {
 
   /** CAT-7's manual correction: scoped to (transactionId, userId) together
    * so one user can never correct another's transaction via a guessed id
-   * -- the same ownership check CategoryRepository.updateColor() already
+   * -- the same ownership check CategoryRepository.update() already
    * established for CAT-10. Returns the updated document (the route needs
    * `merchantNameNormalized` back off it for the write-back call) or null
    * on no match.
@@ -223,6 +240,39 @@ export class TransactionRepository {
       // as a genuine no-match: the caller can't tell "malformed id" from
       // "no such transaction" apart anyway, and shouldn't have to --
       // both correctly become a 404, not a 500 with a stack trace.
+      if (err instanceof Error && err.name === "CastError") {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /** CAT-13: sets (or clears) this user's display-name override for a
+   * transaction -- scoped to (transactionId, userId) together, the same
+   * ownership check `updateCategoryForUser()` above already established,
+   * and the same CastError-to-null tolerance for a malformed id.
+   * `merchantNameOverride: null` clears it (`$unset`) rather than
+   * writing an empty string, so `buildTransactionList()`'s
+   * `merchantNameOverride ?? merchantName ?? merchantNameNormalized`
+   * fallback correctly falls through to Plaid's own name instead of
+   * displaying a blank merchant. Deliberately does not touch
+   * `merchantNameNormalized` -- Tier 1/2 and Subscription's grouping key
+   * keep reading that field unchanged (see its own doc comment on
+   * `Transaction`). */
+  async updateMerchantNameOverrideForUser(
+    userId: string,
+    transactionId: string,
+    merchantNameOverride: string | null,
+  ): Promise<TransactionDocument | null> {
+    try {
+      return await TransactionModel.findOneAndUpdate(
+        { _id: transactionId, userId },
+        merchantNameOverride === null
+          ? { $unset: { merchantNameOverride: "" } }
+          : { $set: { merchantNameOverride } },
+        { new: true },
+      ).lean<TransactionDocument | null>();
+    } catch (err) {
       if (err instanceof Error && err.name === "CastError") {
         return null;
       }

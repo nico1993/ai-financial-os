@@ -30,6 +30,16 @@ export interface TransactionDocument {
   isoCurrencyCode: string;
   /** Plaid's cleaned name. */
   merchantName?: string;
+  /** CAT-13: a user-chosen display name, set only via
+   * TransactionRepository.updateMerchantNameOverrideForUser() -- never
+   * touched by upsertFromSync() (see UpsertTransactionInput's own
+   * comment on `category` for the same reasoning). Wins the existing
+   * `merchantName ?? merchantNameNormalized` display fallback once set
+   * (transactions/list.ts's buildTransactionList()). Deliberately NOT
+   * read by Tier 1/2 or Subscription's grouping key -- those still key
+   * off `merchantNameNormalized` below, unchanged; this only changes
+   * what's displayed. */
+  merchantNameOverride?: string;
   /** Normalized/lowercased key for Tier 1 lookups. */
   merchantNameNormalized: string;
   /** Raw description, for fuzzy/regex matching (Tier 2). */
@@ -77,6 +87,7 @@ const transactionSchema = new Schema<TransactionDocument>(
     amount: { type: Number, required: true },
     isoCurrencyCode: { type: String, required: true },
     merchantName: { type: String },
+    merchantNameOverride: { type: String, trim: true },
     merchantNameNormalized: { type: String, required: true },
     description: { type: String, required: true },
     providerCategory: { type: String },

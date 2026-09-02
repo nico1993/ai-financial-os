@@ -561,4 +561,157 @@ describe("TransactionRepository", () => {
       expect(result).toEqual({ current: [], compare: [] });
     });
   });
+
+  describe("findPageForUser", () => {
+    it("filters to an inclusive dateFrom/dateTo window (WEB-10)", async () => {
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "before", date: new Date("2026-01-01") }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "in-range-start", date: new Date("2026-01-10") }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "in-range-end", date: new Date("2026-01-20") }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "after", date: new Date("2026-02-01") }),
+      );
+
+      const { items } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        dateFrom: new Date("2026-01-10"),
+        dateTo: new Date("2026-01-20"),
+      });
+
+      expect(items.map((i) => i.providerTransactionId).sort()).toEqual([
+        "in-range-end",
+        "in-range-start",
+      ]);
+    });
+
+    it("supports an open-ended dateFrom with no dateTo", async () => {
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "before", date: new Date("2026-01-01") }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "after", date: new Date("2026-02-01") }),
+      );
+
+      const { items } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        dateFrom: new Date("2026-01-15"),
+      });
+
+      expect(items.map((i) => i.providerTransactionId)).toEqual(["after"]);
+    });
+
+    it("filters to an exact category.value match (WEB-10)", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "groceries",
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "dining",
+          category: { tier: 1, value: "Dining", status: "confirmed" },
+        }),
+      );
+
+      const { items } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        category: "Groceries",
+      });
+
+      expect(items.map((i) => i.providerTransactionId)).toEqual(["groceries"]);
+    });
+
+    it("combines the category and date filters with the existing status filter", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "match",
+          date: new Date("2026-01-10"),
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "wrong-status",
+          date: new Date("2026-01-10"),
+          category: { tier: 4, value: "Groceries", status: "needs_review" },
+        }),
+      );
+
+      const { items } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        status: "confirmed",
+        category: "Groceries",
+        dateFrom: new Date("2026-01-01"),
+        dateTo: new Date("2026-01-31"),
+      });
+
+      expect(items.map((i) => i.providerTransactionId)).toEqual(["match"]);
+    });
+  });
+
+  describe("updateMerchantNameOverrideForUser", () => {
+    it("sets an override on a transaction the user owns", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      const updated = await repo.updateMerchantNameOverrideForUser(
+        "user-1",
+        created._id.toString(),
+        "Trader Joe's (weekly groceries)",
+      );
+      expect(updated?.merchantNameOverride).toBe("Trader Joe's (weekly groceries)");
+    });
+
+    it("never touches merchantNameNormalized -- Tier 1/2 and subscription grouping still key off it", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      const updated = await repo.updateMerchantNameOverrideForUser(
+        "user-1",
+        created._id.toString(),
+        "Weekly Groceries",
+      );
+      expect(updated?.merchantNameNormalized).toBe("trader joes");
+    });
+
+    it("returns null (and leaves the transaction untouched) for a different user", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      const result = await repo.updateMerchantNameOverrideForUser(
+        "user-2",
+        created._id.toString(),
+        "Nope",
+      );
+      expect(result).toBeNull();
+
+      const unchanged = await repo.findById(created._id.toString());
+      expect(unchanged?.merchantNameOverride).toBeUndefined();
+    });
+
+    it("clears an existing override when passed null", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      await repo.updateMerchantNameOverrideForUser("user-1", created._id.toString(), "Custom Name");
+
+      const cleared = await repo.updateMerchantNameOverrideForUser(
+        "user-1",
+        created._id.toString(),
+        null,
+      );
+      expect(cleared?.merchantNameOverride).toBeUndefined();
+    });
+
+    it("returns null (not a throw) for a malformed id", async () => {
+      const result = await repo.updateMerchantNameOverrideForUser(
+        "user-1",
+        "not-a-valid-object-id",
+        "x",
+      );
+      expect(result).toBeNull();
+    });
+  });
 });

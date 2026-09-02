@@ -86,6 +86,20 @@ describe("buildTransactionList", () => {
     expect(item?.merchantName).toBe("Trader Joe's");
   });
 
+  it("CAT-13: a merchantNameOverride wins over both merchantName and merchantNameNormalized", () => {
+    const acct = account();
+    const txn = transaction({
+      accountId: acct._id,
+      merchantName: "Trader Joe's",
+      merchantNameNormalized: "trader joes",
+      merchantNameOverride: "Weekly groceries",
+    });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.merchantName).toBe("Weekly groceries");
+  });
+
   it("falls back to a placeholder account when accountId matches nothing passed in", () => {
     const orphan = transaction({ accountId: new mongoose.Types.ObjectId() });
 
