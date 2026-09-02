@@ -147,4 +147,22 @@ describe("buildAccountList", () => {
     expect(item?.officialName).toBe("Chase Total Checking");
     expect(item?.availableBalance).toBe(9_500);
   });
+
+  it("passes through a user-set nickname when present (ACCT-1)", () => {
+    const conn = connection();
+    const acct = account({ connectionId: conn._id, nickname: "Joint Checking" });
+
+    const [item] = buildAccountList([acct], [conn]);
+
+    expect(item?.nickname).toBe("Joint Checking");
+  });
+
+  it("leaves nickname undefined when the account has never been renamed", () => {
+    const conn = connection();
+    const acct = account({ connectionId: conn._id });
+
+    const [item] = buildAccountList([acct], [conn]);
+
+    expect(item?.nickname).toBeUndefined();
+  });
 });

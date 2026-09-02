@@ -20,16 +20,83 @@ import {
   useAccountsQuery,
   useCreateLinkTokenMutation,
   useExchangePublicTokenMutation,
+  useRenameAccountMutation,
   useTriggerSyncMutation,
 } from "../api/accounts";
+import type { AccountListItem } from "../api/accounts";
 import { getApiErrorMessage } from "../api/client";
 import { formatCents } from "../lib/money";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 
 const CONNECTION_STATUS_LABEL: Record<string, string> = {
   login_required: "Needs reconnect",
   error: "Connection error",
 };
+
+/** ACCT-1: the account's display name -- a user-set nickname wins,
+ * falling back to Plaid's own naming (`officialName`, then, since even
+ * that's optional on some account types, the institution name). */
+function accountDisplayName(account: AccountListItem): string {
+  return account.nickname ?? account.officialName ?? account.institutionName;
+}
+
+/** ACCT-1: inline rename control -- click the name to edit it in place,
+ * Enter/blur to save, Escape to cancel. An empty save clears the
+ * nickname back to `officialName ?? institutionName` (the API's own
+ * empty-string-clears convention, routes/accounts.ts). */
+function AccountNameEditor({ account }: { account: AccountListItem }) {
+  const rename = useRenameAccountMutation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const displayName = accountDisplayName(account);
+
+  function startEditing(): void {
+    setDraft(account.nickname ?? "");
+    setEditing(true);
+  }
+
+  function save(): void {
+    const trimmed = draft.trim();
+    if (trimmed !== (account.nickname ?? "")) {
+      rename.mutate({ accountId: account.id, nickname: trimmed });
+    }
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Input
+          autoFocus
+          className="h-7 w-48 text-sm"
+          value={draft}
+          placeholder={account.officialName ?? account.institutionName}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={save}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="group flex items-center gap-1.5 text-left text-sm font-medium text-ink"
+      onClick={startEditing}
+      title="Rename this account"
+    >
+      {displayName}
+      <span className="text-[11px] font-normal text-ink-muted underline decoration-dotted opacity-0 group-hover:opacity-100">
+        Rename
+      </span>
+    </button>
+  );
+}
 
 const SYNC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -133,11 +200,9 @@ export default function AccountsPage() {
               return (
                 <li key={account.id} className="flex items-center justify-between px-4 py-3">
                   <div>
-                    <div className="text-sm font-medium text-ink">
-                      {account.institutionName} · {account.officialName ?? account.subtype}
-                    </div>
+                    <AccountNameEditor account={account} />
                     <div className="text-xs text-ink-muted">
-                      {account.type} · {account.subtype}
+                      {account.institutionName} · {account.type} · {account.subtype}
                       {account.connectionStatus !== "active" && (
                         <span className="ml-2 text-critical-text">
                           {CONNECTION_STATUS_LABEL[account.connectionStatus]}

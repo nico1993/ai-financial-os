@@ -15,6 +15,12 @@ export interface AccountDocument {
   type: AccountType;
   subtype: string;
   officialName?: string;
+  /** ACCT-1: a user-chosen display name, set only via
+   * AccountRepository.updateNickname() -- never written by
+   * upsertFromSync() (see UpsertAccountInput's own comment), so a
+   * provider resync can never silently overwrite a name the user picked.
+   * Display precedence is `nickname ?? officialName ?? institutionName`. */
+  nickname?: string;
   /** Integer cents, never float (ARCHITECTURE.md §3.2). */
   currentBalance: number;
   availableBalance?: number;
@@ -37,6 +43,7 @@ const accountSchema = new Schema<AccountDocument>(
     },
     subtype: { type: String, required: true },
     officialName: { type: String },
+    nickname: { type: String, trim: true },
     currentBalance: { type: Number, required: true },
     availableBalance: { type: Number },
     isoCurrencyCode: { type: String, required: true },

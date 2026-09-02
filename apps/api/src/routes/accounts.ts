@@ -15,6 +15,13 @@ import { requestProviderSync } from "../queues.js";
 const accountRepo = new AccountRepository();
 const connectionRepo = new ConnectionRepository();
 
+const renameAccountSchema = z.object({
+  // No .min(1) -- an empty string is a valid, meaningful input here (it
+  // clears the nickname), unlike every other z.string().min(1) elsewhere
+  // in this file/app that treats an empty value as invalid.
+  nickname: z.string().max(120),
+});
+
 export async function registerAccountRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/accounts", { preHandler: requireAuth }, async (req, reply) => {
     const userId = req.session.userId as string;
@@ -46,5 +53,38 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
 
     await requestProviderSync(connection._id.toString());
     return reply.code(202).send({ status: "queued" });
+  });
+
+  // ACCT-1: rename a linked account. Same ownership-scoped-repository-
+  // method pattern CategoryRepository.update()/TransactionRepository.
+  // updateCategoryForUser() already established elsewhere -- the route
+  // just parses input and 404s on no match, all the actual
+  // {_id, userId} scoping lives in AccountRepository.updateNickname().
+  // An empty/whitespace-only `nickname` clears it back to the provider
+  // name (nickname: null -> $unset) rather than being rejected, so
+  // "reset to the bank's name" is just clearing the field, not a
+  // separate action.
+  app.patch("/api/accounts/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const userId = req.session.userId as string;
+    const params = z.object({ id: z.string().min(1) }).safeParse(req.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid account id" });
+    }
+    const body = renameAccountSchema.safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.issues[0]?.message ?? "invalid input" });
+    }
+
+    const trimmed = body.data.nickname.trim();
+    const updated = await accountRepo.updateNickname(
+      userId,
+      params.data.id,
+      trimmed.length > 0 ? trimmed : null,
+    );
+    if (!updated) {
+      return reply.code(404).send({ error: "account not found" });
+    }
+
+    return reply.send({ id: updated._id.toString(), nickname: updated.nickname ?? null });
   });
 }

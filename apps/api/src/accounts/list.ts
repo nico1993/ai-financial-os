@@ -31,6 +31,9 @@ export interface AccountListItem {
   type: AccountType;
   subtype: string;
   officialName?: string;
+  /** ACCT-1: a user-chosen name, when set -- `AccountsPage.tsx`'s display
+   * precedence is `nickname ?? officialName ?? institutionName`. */
+  nickname?: string;
   currentBalance: number;
   availableBalance?: number;
   isoCurrencyCode: string;
@@ -69,6 +72,7 @@ export function buildAccountList(
         type: account.type,
         subtype: account.subtype,
         officialName: account.officialName,
+        nickname: account.nickname,
         currentBalance: account.currentBalance,
         availableBalance: account.availableBalance,
         isoCurrencyCode: account.isoCurrencyCode,

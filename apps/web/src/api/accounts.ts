@@ -28,6 +28,9 @@ export interface AccountListItem {
   type: AccountType;
   subtype: string;
   officialName?: string;
+  /** ACCT-1: a user-chosen name -- display precedence is
+   * `nickname ?? officialName ?? institutionName` (AccountsPage.tsx). */
+  nickname?: string;
   currentBalance: number;
   availableBalance?: number;
   isoCurrencyCode: string;
@@ -96,6 +99,35 @@ export function useExchangePublicTokenMutation() {
   return useMutation({
     mutationFn: (publicToken: string) =>
       apiFetch<ExchangeResult>("/api/plaid/exchange", { method: "POST", body: { publicToken } }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ACCOUNTS_QUERY_KEY });
+    },
+  });
+}
+
+// -- ACCT-1: rename a linked account ---------------------------------------
+
+export interface RenameAccountInput {
+  accountId: string;
+  /** Empty string clears the nickname back to
+   * `officialName ?? institutionName` -- mirrors the API's own
+   * clear-via-empty-string handling (routes/accounts.ts). */
+  nickname: string;
+}
+
+export interface RenameAccountResult {
+  id: string;
+  nickname: string | null;
+}
+
+export function useRenameAccountMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ accountId, nickname }: RenameAccountInput) =>
+      apiFetch<RenameAccountResult>(`/api/accounts/${accountId}`, {
+        method: "PATCH",
+        body: { nickname },
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ACCOUNTS_QUERY_KEY });
     },

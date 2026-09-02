@@ -57,4 +57,47 @@ describe("AccountRepository", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.providerAccountId).toBe("a1");
   });
+
+  describe("updateNickname", () => {
+    it("sets a nickname on an account the user owns", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      const updated = await repo.updateNickname("user-1", created._id.toString(), "Joint Checking");
+      expect(updated?.nickname).toBe("Joint Checking");
+    });
+
+    it("returns null for an account owned by a different user, and leaves it untouched", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      const result = await repo.updateNickname("user-2", created._id.toString(), "Nope");
+      expect(result).toBeNull();
+
+      const unchanged = await repo.findById(created._id.toString());
+      expect(unchanged?.nickname).toBeUndefined();
+    });
+
+    it("clears an existing nickname when passed null", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      await repo.updateNickname("user-1", created._id.toString(), "Joint Checking");
+
+      const cleared = await repo.updateNickname("user-1", created._id.toString(), null);
+      expect(cleared?.nickname).toBeUndefined();
+    });
+
+    it("returns null (not a throw) for a malformed id", async () => {
+      const result = await repo.updateNickname("user-1", "not-a-valid-object-id", "x");
+      expect(result).toBeNull();
+    });
+
+    it("a resync never overwrites a nickname the user set", async () => {
+      const created = await repo.upsertFromSync(baseInput());
+      await repo.updateNickname("user-1", created._id.toString(), "Joint Checking");
+
+      // upsertFromSync's $set never includes `nickname` -- UpsertAccountInput
+      // has no such field, so there is nothing for a resync to pass here.
+      await repo.upsertFromSync(baseInput({ currentBalance: 8_000 }));
+
+      const after = await repo.findById(created._id.toString());
+      expect(after?.nickname).toBe("Joint Checking");
+      expect(after?.currentBalance).toBe(8_000);
+    });
+  });
 });
