@@ -4,6 +4,7 @@ import {
   previousPeriodRange,
   formatDayLabel,
   formatMonthLabel,
+  currentCalendarMonthRange,
 } from "./dateRange";
 
 describe("defaultAnalyticsRange", () => {
@@ -48,5 +49,24 @@ describe("formatDayLabel", () => {
 describe("formatMonthLabel", () => {
   it("formats a UTC date string as a short month + 2-digit year", () => {
     expect(formatMonthLabel("2026-01-01T00:00:00.000Z")).toBe("Jan 26");
+  });
+});
+
+describe("currentCalendarMonthRange", () => {
+  it("spans the 1st through the last day of the month, inclusive", () => {
+    const range = currentCalendarMonthRange(new Date("2026-02-15T12:00:00.000Z"));
+    expect(range.start).toBe("2026-02-01");
+    expect(range.end).toBe("2026-02-28");
+  });
+
+  it("handles a leap-year February correctly", () => {
+    const range = currentCalendarMonthRange(new Date("2028-02-10T00:00:00.000Z"));
+    expect(range.end).toBe("2028-02-29");
+  });
+
+  it("handles a December -> January year rollover", () => {
+    const range = currentCalendarMonthRange(new Date("2026-12-25T00:00:00.000Z"));
+    expect(range.start).toBe("2026-12-01");
+    expect(range.end).toBe("2026-12-31");
   });
 });

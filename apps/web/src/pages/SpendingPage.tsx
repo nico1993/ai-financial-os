@@ -5,7 +5,9 @@ import { SpendingCategoriesChart } from "../components/charts/SpendingCategories
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { defaultAnalyticsRange, previousPeriodRange } from "../lib/dateRange";
 
-// ANLY-5/ANLY-6/ANLY-9.
+// ANLY-5/ANLY-6/ANLY-9. ANLY-14: `range` (this page's own selected
+// date window) is threaded through to SpendingCategoriesChart so its
+// row links carry the same window into the Transactions drill-down.
 export default function SpendingPage() {
   const [range, setRange] = useState(defaultAnalyticsRange);
   const [compareEnabled, setCompareEnabled] = useState(false);
@@ -50,7 +52,11 @@ export default function SpendingPage() {
             </p>
           )}
           {query.data && (
-            <SpendingCategoriesChart current={query.data.current} compare={query.data.compare} />
+            <SpendingCategoriesChart
+              current={query.data.current}
+              compare={query.data.compare}
+              range={range}
+            />
           )}
         </CardContent>
       </Card>

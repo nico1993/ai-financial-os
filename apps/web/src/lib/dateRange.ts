@@ -70,3 +70,14 @@ export function formatDayLabel(iso: string): string {
 export function formatMonthLabel(iso: string): string {
   return MONTH_LABEL_FORMAT.format(new Date(iso));
 }
+
+/** WEB-10's "this calendar month" shortcut for the Transactions page
+ * filter: the first through last day of `now`'s UTC calendar month,
+ * inclusive -- day 0 of the *next* month is JS's own idiom for "the
+ * last day of this month" (`Date.UTC` normalizes an out-of-range day
+ * argument). */
+export function currentCalendarMonthRange(now: Date = new Date()): DateRangeValue {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+  return { start: toDateString(start), end: toDateString(end) };
+}

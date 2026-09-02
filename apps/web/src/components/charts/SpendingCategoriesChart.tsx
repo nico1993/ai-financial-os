@@ -16,10 +16,22 @@
 // A ranked bar list IS its own accessible table (label + value on every
 // row already, no color-only encoding), so this doesn't duplicate a
 // hidden <table> the way the line/bar charts do.
+//
+// ANLY-14: every row except "Other" links to `/transactions`, filtered
+// to that category over this same date range (WEB-10's filter, which
+// this depends on). "Other" is excluded from the click affordance --
+// BACKLOG.md's own open question, resolved here as the simplest safe
+// default: it folds together every category past the palette's 8 slots
+// (buildRows() below), so there is no single `category.value` to filter
+// by. The alternative (a multi-value filter WEB-10 would need to grow to
+// support) was considered and set aside rather than building filter
+// surface a real product decision hasn't asked for yet.
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import type { CategoryDistributionItem } from "../../api/analytics";
 import { CATEGORICAL_PALETTE, UI_COLOR } from "../../design/tokens";
 import { formatCents } from "../../lib/money";
+import type { DateRangeValue } from "../../lib/dateRange";
 
 interface CategoryRow {
   category: string;
@@ -63,9 +75,25 @@ function buildRows(
 interface SpendingCategoriesChartProps {
   current: CategoryDistributionItem[];
   compare: CategoryDistributionItem[] | null;
+  /** ANLY-14: the Spending page's currently-selected date range --
+   * carried into each row's `/transactions` link so the drill-down opens
+   * scoped to the same window this chart is showing, not the ledger's
+   * own unfiltered default. */
+  range: DateRangeValue;
 }
 
-export function SpendingCategoriesChart({ current, compare }: SpendingCategoriesChartProps) {
+/** ANLY-14: `/transactions?category=<value>&dateFrom=<start>&dateTo=<end>`
+ * -- the exact param names WEB-10's TransactionsPage.tsx reads on mount. */
+function transactionsLinkFor(category: string, range: DateRangeValue): string {
+  const params = new URLSearchParams({
+    category,
+    dateFrom: range.start,
+    dateTo: range.end,
+  });
+  return `/transactions?${params.toString()}`;
+}
+
+export function SpendingCategoriesChart({ current, compare, range }: SpendingCategoriesChartProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const rows = useMemo(() => buildRows(current, compare), [current, compare]);
   const maxTotal = useMemo(() => rows.reduce((max, r) => Math.max(max, r.total), 0), [rows]);
@@ -79,13 +107,9 @@ export function SpendingCategoriesChart({ current, compare }: SpendingCategories
       {rows.map((row) => {
         const widthPct = maxTotal > 0 ? (row.total / maxTotal) * 100 : 0;
         const delta = row.compareTotal === null ? null : row.total - row.compareTotal;
-        return (
-          <div
-            key={row.category}
-            className="flex items-center gap-3"
-            onMouseEnter={() => setHovered(row.category)}
-            onMouseLeave={() => setHovered((prev) => (prev === row.category ? null : prev))}
-          >
+
+        const rowContent = (
+          <>
             <div className="w-32 flex-shrink-0 truncate text-xs text-ink-secondary">
               {row.category}
             </div>
@@ -113,7 +137,35 @@ export function SpendingCategoriesChart({ current, compare }: SpendingCategories
                 )}
               </div>
             )}
-          </div>
+          </>
+        );
+
+        const rowHandlers = {
+          onMouseEnter: () => setHovered(row.category),
+          onMouseLeave: () =>
+            setHovered((prev: string | null) => (prev === row.category ? null : prev)),
+        };
+
+        // "Other" (row.color === null) has no single category to filter
+        // by -- see the file comment above -- so it renders as a plain,
+        // non-interactive row instead of a link.
+        if (row.color === null) {
+          return (
+            <div key={row.category} className="flex items-center gap-3" {...rowHandlers}>
+              {rowContent}
+            </div>
+          );
+        }
+
+        return (
+          <Link
+            key={row.category}
+            to={transactionsLinkFor(row.category, range)}
+            className="flex items-center gap-3 rounded-sm hover:bg-surface-secondary"
+            {...rowHandlers}
+          >
+            {rowContent}
+          </Link>
         );
       })}
     </div>
