@@ -26,6 +26,7 @@ import {
 import type { AccountListItem } from "../api/accounts";
 import { getApiErrorMessage } from "../api/client";
 import { accountDisplayName } from "../lib/accountDisplayName";
+import { DeleteAccountButton } from "../components/DeleteAccountButton";
 import { formatCents } from "../lib/money";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -215,8 +216,14 @@ export default function AccountsPage() {
                       </button>
                     </div>
                   </div>
-                  <div className="font-mono text-sm tabular-nums text-ink">
-                    {formatCents(account.currentBalance)}
+                  <div className="flex items-center gap-3">
+                    <div className="font-mono text-sm tabular-nums text-ink">
+                      {formatCents(account.currentBalance)}
+                    </div>
+                    <DeleteAccountButton
+                      accountId={account.id}
+                      accountLabel={accountDisplayName(account)}
+                    />
                   </div>
                 </li>
               );

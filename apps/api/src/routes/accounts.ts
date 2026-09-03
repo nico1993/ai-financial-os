@@ -25,8 +25,14 @@ const renameAccountSchema = z.object({
 export async function registerAccountRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/accounts", { preHandler: requireAuth }, async (req, reply) => {
     const userId = req.session.userId as string;
+    // ACCT-2: findActiveByUser(), not findByUserId() -- this list is
+    // what the user manages (rename, delete), so a deleted account
+    // should stop appearing here. findByUserId() (unfiltered) stays the
+    // right call for routes/transactions.ts's account join and the
+    // worker's rollups.ts, both of which need an archived account's data
+    // to keep resolving for historical rows.
     const [accounts, connections] = await Promise.all([
-      accountRepo.findByUserId(userId),
+      accountRepo.findActiveByUser(userId),
       connectionRepo.findByUserId(userId),
     ]);
     return reply.send(buildAccountList(accounts, connections));
@@ -86,5 +92,26 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
     }
 
     return reply.send({ id: updated._id.toString(), nickname: updated.nickname ?? null });
+  });
+
+  // ACCT-2: "delete this account" -- soft (AccountRepository.archive()),
+  // scoped to (id, userId) inside that method, same pattern as the
+  // PATCH route above. DELETE is the honest HTTP verb for what the user
+  // is asking for even though the implementation is non-destructive --
+  // the response still reflects that: `deleted: true` plus the id, not
+  // a 204 that would imply the row is gone.
+  app.delete("/api/accounts/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const userId = req.session.userId as string;
+    const params = z.object({ id: z.string().min(1) }).safeParse(req.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "invalid account id" });
+    }
+
+    const archived = await accountRepo.archive(userId, params.data.id);
+    if (!archived) {
+      return reply.code(404).send({ error: "account not found" });
+    }
+
+    return reply.send({ id: archived._id.toString(), deleted: true });
   });
 }

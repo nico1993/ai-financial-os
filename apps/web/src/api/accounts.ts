@@ -133,3 +133,28 @@ export function useRenameAccountMutation() {
     },
   });
 }
+
+// -- ACCT-2: delete (soft) a linked account ---------------------------------
+
+export interface DeleteAccountResult {
+  id: string;
+  deleted: true;
+}
+
+/** "Delete" is soft server-side (AccountRepository.archive()) -- this
+ * account drops off `useAccountsQuery()`'s list on success, but its
+ * transactions and balance history are untouched, so this only
+ * invalidates `["accounts"]`. Doesn't touch `["transactions"]`: a
+ * deleted account's past transactions still show (routes/transactions.ts
+ * reads AccountRepository.findByUserId(), not findActiveByUser()), by
+ * design -- see Account.archived's own doc comment. */
+export function useDeleteAccountMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (accountId: string) =>
+      apiFetch<DeleteAccountResult>(`/api/accounts/${accountId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ACCOUNTS_QUERY_KEY });
+    },
+  });
+}
