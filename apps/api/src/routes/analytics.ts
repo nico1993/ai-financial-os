@@ -139,6 +139,24 @@ export async function registerAnalyticsRoutes(app: FastifyInstance): Promise<voi
     return reply.send({ current, compare: null });
   });
 
+  // ANLY-13: Income-by-category, the income-side mirror of
+  // spending-categories above -- feeds Overview's "Period Income" donut.
+  // No compare-range support (see getIncomeCategoryDistribution()'s own
+  // doc comment) -- reuses parseRangeQuery for start/end validation the
+  // same way every other route here does, but a caller sending
+  // compareStart/compareEnd anyway just has them ignored rather than
+  // rejected, the same tolerance the plain (no-compare) branch of
+  // spending-categories above already has.
+  app.get("/api/analytics/income-categories", { preHandler: requireAuth }, async (req, reply) => {
+    const parsed = parseRangeQuery(req, reply);
+    if (!parsed) return;
+    const userId = req.session.userId as string;
+    const { range } = parsed;
+
+    const current = await transactions.getIncomeCategoryDistribution(userId, range);
+    return reply.send({ current });
+  });
+
   // Subscriptions -- not its own ANLY ticket, but ANLY-9's Subscriptions
   // page needs a real endpoint to call (useRecurringQuery), and
   // ANLY-7 already built the read side (SubscriptionRepository); this is

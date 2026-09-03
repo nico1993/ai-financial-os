@@ -121,6 +121,29 @@ export function useSpendingCategoriesQuery(range: AnalyticsCompareRange) {
   });
 }
 
+// -- Income categories (ANLY-13) -------------------------------------------
+//
+// The income-side mirror of spending-categories above -- feeds Overview's
+// "Period Income" donut (CategoryDonutChart.tsx). No compare-range
+// support, unlike spending-categories -- Overview doesn't expose a
+// "compare to previous period" toggle the way the now-retired
+// SpendingPage.tsx did, so this only ever takes a plain range.
+
+export interface IncomeCategoriesResponse {
+  current: CategoryDistributionItem[];
+}
+
+export function useIncomeCategoriesQuery(range: AnalyticsDateRange) {
+  return useQuery({
+    queryKey: ["analytics", "income-categories", range.start, range.end],
+    queryFn: () =>
+      apiFetch<IncomeCategoriesResponse>(
+        `/api/analytics/income-categories?${buildRangeQuery(range)}`,
+      ),
+    refetchInterval: BACKGROUND_REFETCH_FALLBACK_MS,
+  });
+}
+
 // -- Subscriptions (ANLY-7's read side) ------------------------------------
 
 export type SubscriptionFrequency = "monthly" | "annual" | "other";

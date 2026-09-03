@@ -25,3 +25,16 @@ coverage/
 # path anymore (apps/worker/src/queues/transferMatching.ts imports the
 # relocated version from @financial-os/shared now).
 apps/worker/src/transfer/
+# ANLY-13: these five files were replaced wholesale (OverviewPage.tsx +
+# WalletsSection.tsx + CategoryDonutChart.tsx now cover everything they
+# did) and removed from the index via `git update-index --force-remove`,
+# the same unlink-blocked-sandbox workaround as the `apps/worker/src/transfer/`
+# entry above -- their bytes are stale leftovers this session's
+# device-bridge shell cannot actually delete. Safe to `rm` for real next
+# time this repo is open somewhere without that restriction; nothing
+# imports any of these five anymore.
+apps/web/src/pages/NetWorthPage.tsx
+apps/web/src/pages/CashFlowPage.tsx
+apps/web/src/pages/AccountsPage.tsx
+apps/web/src/pages/SpendingPage.tsx
+apps/web/src/components/charts/SpendingCategoriesChart.tsx

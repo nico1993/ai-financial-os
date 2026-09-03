@@ -427,6 +427,41 @@ export class TransactionRepository {
     ]);
   }
 
+  /** ANLY-13's "Period Income" donut (Overview page): the income-side
+   * mirror of getCategoryDistribution() above -- same shape, same
+   * exclusions (isRemoved, excludeFromCashFlow, date range), but
+   * `amount: {$lt: 0}` (Plaid convention: negative = money in) instead of
+   * `{$gt: 0}`. The summed total is negated in the aggregation itself so
+   * it comes back an ordinary positive number -- an "Income" chart
+   * showing negative figures would be confusing, the same reasoning
+   * apps/web's own formatAmountDisplay() applies when rendering a signed
+   * amount as text, just done here since this is a raw number a chart
+   * sizes a slice by, not text that function would touch.
+   *
+   * No compare-range variant (unlike getCategoryDistributionComparison()
+   * below) -- ANLY-13's Overview page doesn't expose a "compare to
+   * previous period" toggle the way the now-retired SpendingPage.tsx did,
+   * so nothing calls one yet. Add one the same way if that changes. */
+  async getIncomeCategoryDistribution(
+    userId: string,
+    range: DateRange,
+  ): Promise<{ category: string; total: number }[]> {
+    return TransactionModel.aggregate<{ category: string; total: number }>([
+      {
+        $match: {
+          userId,
+          isRemoved: false,
+          excludeFromCashFlow: { $ne: true },
+          amount: { $lt: 0 },
+          date: { $gte: range.start, $lte: range.end },
+        },
+      },
+      { $group: { _id: "$category.value", total: { $sum: { $multiply: ["$amount", -1] } } } },
+      { $sort: { total: -1 } },
+      { $project: { _id: 0, category: "$_id", total: 1 } },
+    ]);
+  }
+
   /** ANLY-6's comparison-range variant of getCategoryDistribution() above:
    * both `range` and `compareRange` computed in one `$facet` aggregation
    * (ARCHITECTURE.md §4.2's own example) rather than two separate

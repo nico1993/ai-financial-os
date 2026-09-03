@@ -577,6 +577,95 @@ describe("TransactionRepository", () => {
     });
   });
 
+  describe("getIncomeCategoryDistribution", () => {
+    const JAN: DateRange = { start: new Date("2026-01-01"), end: new Date("2026-01-31") };
+
+    it("groups by category.value and sums income (negative amounts), returning positive totals, sorted descending", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "paycheck1",
+          date: new Date("2026-01-05"),
+          amount: -200_000,
+          category: { tier: 1, value: "Income", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "paycheck2",
+          date: new Date("2026-01-20"),
+          amount: -200_000,
+          category: { tier: 1, value: "Income", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "refund",
+          date: new Date("2026-01-10"),
+          amount: -5_000,
+          category: { tier: 1, value: "Reimbursement", status: "confirmed" },
+        }),
+      );
+
+      const distribution = await repo.getIncomeCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([
+        { category: "Income", total: 400_000 },
+        { category: "Reimbursement", total: 5_000 },
+      ]);
+    });
+
+    it("excludes spending (positive amounts) from an income distribution", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "groceries",
+          date: new Date("2026-01-05"),
+          amount: 4_000,
+          category: { tier: 1, value: "Groceries", status: "confirmed" },
+        }),
+      );
+      const distribution = await repo.getIncomeCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([]);
+    });
+
+    it("excludes transfer-matched transactions", async () => {
+      const matched = await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "internal-in",
+          date: new Date("2026-01-01"),
+          amount: -5_000,
+          category: { tier: 1, value: "Transfer", status: "confirmed" },
+        }),
+      );
+      await repo.applyTransferMatch("user-1", [matched._id.toString()], "group-1");
+
+      const distribution = await repo.getIncomeCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([]);
+    });
+
+    it("is scoped to the requesting user", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "mine",
+          date: new Date("2026-01-05"),
+          amount: -1_000,
+          userId: "user-1",
+          category: { tier: 1, value: "Income", status: "confirmed" },
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "theirs",
+          date: new Date("2026-01-05"),
+          amount: -1_000,
+          userId: "user-2",
+          category: { tier: 1, value: "Income", status: "confirmed" },
+        }),
+      );
+
+      const distribution = await repo.getIncomeCategoryDistribution("user-1", JAN);
+      expect(distribution).toEqual([{ category: "Income", total: 1_000 }]);
+    });
+  });
+
   describe("getCategoryDistributionComparison", () => {
     const JAN: DateRange = { start: new Date("2026-01-01"), end: new Date("2026-01-31") };
     const FEB: DateRange = { start: new Date("2026-02-01"), end: new Date("2026-02-28") };

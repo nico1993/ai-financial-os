@@ -6,7 +6,12 @@ import { Button } from "../components/ui/button";
 import { useDashboardEvents } from "../lib/useDashboardEvents";
 import { cn } from "../lib/utils";
 
-function IconAccounts(props: SVGProps<SVGSVGElement>) {
+// ANLY-13: Overview's nav icon -- previously IconAccounts (a house/
+// building glyph, unchanged path). Reused rather than redrawn: it
+// already reads as "home," and /accounts (the route it used to label) no
+// longer exists as its own destination now that WalletsSection lives on
+// Overview instead.
+function IconHome(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" {...props}>
       <path
@@ -29,40 +34,6 @@ function IconLedger(props: SVGProps<SVGSVGElement>) {
         strokeWidth="1.6"
         strokeLinecap="round"
       />
-    </svg>
-  );
-}
-function IconTrend(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <path
-        d="M3 17l5-6 4 4 8-9"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-function IconFlow(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <path
-        d="M3 12h4l2-7 4 14 2-7h6"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-function IconPie(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M12 3.5A8.5 8.5 0 0 1 12 20.5" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   );
 }
@@ -113,21 +84,15 @@ interface NavItem {
   icon: (props: SVGProps<SVGSVGElement>) => ReactNode;
 }
 
-// The five destinations WEB-2 actually names in BACKLOG.md, in the order
-// listed there, plus Accounts (WEB-7) and Transactions (WEB-8) leading
-// them, and Categories (CAT-16) trailing them. Accounts is first --
-// connecting a bank is the one thing that has to happen before anything
-// else has real data to show. Transactions is second, ahead of the four
-// analytics pages, since it's the raw ledger those four are aggregates
-// OF -- someone checking "did that charge actually post" wants the
-// ledger, not a chart. Categories is last -- see its own item's comment
-// below for why.
+// ANLY-13 folded four separate destinations (Accounts, Net worth, Cash
+// flow, Spending) into the one Overview page/nav item, leading the list
+// as the app's new home -- WEB-2's original ordering reasoning (ledger
+// second since it's the raw data the aggregates above it summarize)
+// still holds for what remains. Categories stays last -- see its own
+// item's comment below for why.
 const NAV_ITEMS: NavItem[] = [
-  { to: "/accounts", label: "Accounts", icon: IconAccounts },
+  { to: "/overview", label: "Overview", icon: IconHome },
   { to: "/transactions", label: "Transactions", icon: IconLedger },
-  { to: "/net-worth", label: "Net worth", icon: IconTrend },
-  { to: "/cash-flow", label: "Cash flow", icon: IconFlow },
-  { to: "/spending", label: "Spending", icon: IconPie },
   { to: "/subscriptions", label: "Subscriptions", icon: IconCalendar },
   { to: "/review", label: "Needs review", icon: IconFlag },
   // CAT-16: /categories, last -- category management is something a

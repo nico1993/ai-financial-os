@@ -3,11 +3,8 @@ import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { AppShell } from "./layout/AppShell";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
-import AccountsPage from "./pages/AccountsPage";
 import TransactionsPage from "./pages/TransactionsPage";
-import NetWorthPage from "./pages/NetWorthPage";
-import CashFlowPage from "./pages/CashFlowPage";
-import SpendingPage from "./pages/SpendingPage";
+import OverviewPage from "./pages/OverviewPage";
 import SubscriptionsPage from "./pages/SubscriptionsPage";
 import ReviewPage from "./pages/ReviewPage";
 import CategoriesPage from "./pages/CategoriesPage";
@@ -26,12 +23,15 @@ import CategoriesPage from "./pages/CategoriesPage";
 // transaction ledger turned out to not exist anywhere despite four pages
 // of aggregates over it (BACKLOG.md's WEB-8 gap note).
 //
+// ANLY-13 replaces /net-worth, /cash-flow, /spending, and /accounts (four
+// routes) with a single /overview route absorbing all four pages' content
+// -- see OverviewPage.tsx's own file header for the layout. "/" and any
+// unmatched path both redirect to /overview now (previously /net-worth);
+// nothing else about the redirect shape changes.
+//
 // /login and /register (AUTH-6) both sit outside ProtectedRoute
 // (public); everything else nests under it, then under AppShell for the
-// shared nav/header (WEB-4). "/" redirects to /net-worth rather than
-// being its own page -- BACKLOG.md never named a distinct
-// overview/dashboard-home route, so this doesn't invent one ahead of the
-// ticket that would.
+// shared nav/header (WEB-4).
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
   { path: "/register", element: <RegisterPage /> },
@@ -41,12 +41,9 @@ export const router = createBrowserRouter([
       {
         element: <AppShell />,
         children: [
-          { index: true, element: <Navigate to="/net-worth" replace /> },
-          { path: "accounts", element: <AccountsPage /> },
+          { index: true, element: <Navigate to="/overview" replace /> },
+          { path: "overview", element: <OverviewPage /> },
           { path: "transactions", element: <TransactionsPage /> },
-          { path: "net-worth", element: <NetWorthPage /> },
-          { path: "cash-flow", element: <CashFlowPage /> },
-          { path: "spending", element: <SpendingPage /> },
           { path: "subscriptions", element: <SubscriptionsPage /> },
           { path: "review", element: <ReviewPage /> },
           // CAT-16: the /categories management page -- three grouped
@@ -54,7 +51,7 @@ export const router = createBrowserRouter([
           // relocated off ReviewPage.tsx (see CategoriesPage.tsx's own
           // comment).
           { path: "categories", element: <CategoriesPage /> },
-          { path: "*", element: <Navigate to="/net-worth" replace /> },
+          { path: "*", element: <Navigate to="/overview" replace /> },
         ],
       },
     ],
