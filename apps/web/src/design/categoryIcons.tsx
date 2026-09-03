@@ -8,14 +8,20 @@
 // published version (its `dynamicIconImports`/named-export manifests),
 // not assumed from general familiarity with the library.
 //
-// 24 icons total: one per DEFAULT_CATEGORY_SEED
+// 28 icons total: one per DEFAULT_CATEGORY_SEED
 // (apps/worker/src/categorize/categories.ts -- duplicated key-for-key, the
 // same cross-app small-constant-list duplication CATEGORICAL_PALETTE
 // already established between that file and tokens.ts, since apps/web
 // can't import apps/worker either way) plus 6 extras sized to give a
 // custom category (CAT-14) a reasonable spread of choices from the same
 // curated set, per this ticket's own "room for custom ones to pick from
-// the same set" text.
+// the same set" text. CAT-19 added the 4 income-taxonomy keys
+// (rotate-ccw/percent/party-popper/circle-plus) CAT-18's new categories
+// need -- confirmed against the installed lucide-react@1.39.0's actual
+// dist/esm/icons/ output, not assumed from the name alone (CAT-11's own
+// registry-check discipline). The original 18 were re-reviewed at the
+// same time and left as they were -- nothing forced or generic-feeling
+// stood out worth changing.
 import {
   ArrowLeftRight,
   Banknote,
@@ -23,6 +29,7 @@ import {
   Briefcase,
   Car,
   CircleHelp,
+  CirclePlus,
   Clapperboard,
   Coffee,
   Gift,
@@ -30,9 +37,12 @@ import {
   HeartPulse,
   Home,
   Music,
+  PartyPopper,
+  Percent,
   Plane,
   Receipt,
   Repeat,
+  RotateCcw,
   Shield,
   ShoppingBag,
   ShoppingCart,
@@ -82,6 +92,14 @@ export const CATEGORY_ICON_OPTIONS: readonly CategoryIconOption[] = [
   { key: "music", label: "Music", Icon: Music },
   { key: "book-open", label: "Learning", Icon: BookOpen },
   { key: "wallet", label: "Wallet", Icon: Wallet },
+  // CAT-19: for CAT-18's 4 new income categories. "gift" above is
+  // already "Gifts & Donations"'s (expense-side) icon -- Gifts Received
+  // gets its own (party-popper) rather than reusing it, so the two
+  // don't look identical in this exact picker.
+  { key: "rotate-ccw", label: "Reimbursement", Icon: RotateCcw },
+  { key: "percent", label: "Interest & Dividends", Icon: Percent },
+  { key: "party-popper", label: "Gifts Received", Icon: PartyPopper },
+  { key: "circle-plus", label: "Other Income", Icon: CirclePlus },
 ];
 
 const CATEGORY_ICON_COMPONENTS: Record<string, LucideIcon> = Object.fromEntries(
