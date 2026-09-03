@@ -38,3 +38,8 @@ apps/web/src/pages/CashFlowPage.tsx
 apps/web/src/pages/AccountsPage.tsx
 apps/web/src/pages/SpendingPage.tsx
 apps/web/src/components/charts/SpendingCategoriesChart.tsx
+# A local `redis-server` run from the repo root writes its RDB snapshot
+# here by default -- not application data, and this has landed in the
+# working tree as untracked clutter at least twice now (2026-09-02's
+# commit-2026-09-02.sh already called out this exact file once).
+*.rdb
