@@ -17,10 +17,10 @@ import { useState } from "react";
 import { useCategoriesQuery } from "../api/categories";
 import { useCorrectCategoryMutation } from "../api/transactions";
 import type { TransactionListItem } from "../api/transactions";
+import { buildCategorySelectOptions } from "../lib/categoryOptions";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { CategorySelect } from "./CategorySelect";
-import type { CategorySelectOption } from "./CategorySelect";
 
 export interface ReviewCategoryControlProps {
   transaction: TransactionListItem;
@@ -48,26 +48,11 @@ export function ReviewCategoryControl({ transaction }: ReviewCategoryControlProp
   // showing each option's icon, not a plain native <select> (which can't
   // render one at all).
   if (hasCategories) {
-    const currentIsListed = categories.data?.some((c) => c.name === transaction.category.value);
-    // The transaction's current value might not be in the active list
-    // (an archived category, or a raw Tier 1-3 guess that was never
-    // added as a real Category row) -- offered anyway, first in the
-    // list, so the control shows what's actually on the transaction
-    // instead of silently jumping to the first real option. It isn't
-    // backed by a real Category row, so it gets no icon/swatch of its
-    // own -- same as before this ticket, just via CategorySelect's
-    // `icon`/`color` being left undefined rather than a plain <option>.
-    const options: CategorySelectOption[] = [
-      ...(currentIsListed
-        ? []
-        : [{ value: transaction.category.value, label: transaction.category.value }]),
-      ...(categories.data ?? []).map((c) => ({
-        value: c.name,
-        label: c.name,
-        icon: c.icon,
-        color: c.color,
-      })),
-    ];
+    // CAT-12: this exact options-building logic (including the "current
+    // value isn't in the active list" fallback) now lives in
+    // lib/categoryOptions.ts, shared with TransactionEditDialog's own
+    // category field.
+    const options = buildCategorySelectOptions(categories.data ?? [], transaction.category.value);
     return (
       <CategorySelect
         value={transaction.category.value}

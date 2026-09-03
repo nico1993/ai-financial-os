@@ -8,80 +8,24 @@
 //
 // Deliberately dumb about fetching/paging -- TransactionsPage owns that,
 // CAT-7's review queue owns its own fetch (status: "needs_review") and
-// passes results through here the same way. NOT dumb about merchant-name
-// editing, though (CAT-13): every place this table renders benefits from
-// being able to rename a merchant inline, so that control lives here
+// passes results through here the same way. NOT dumb about editing,
+// though (CAT-12): every place this table renders benefits from the
+// same "click any row to edit it" popup, so that control lives here
 // rather than being threaded through as a second `renderRowAction`-style
-// slot every caller would have to wire up identically. CAT-12's future
-// edit popup is expected to fold this back into a single "click the row"
-// affordance -- this is the standalone stand-in until that lands.
+// slot every caller would have to wire up identically. This used to be
+// CAT-13's standalone inline merchant-rename stand-in (`MerchantCell`),
+// folded into CAT-12's fuller TransactionEditDialog now that it exists,
+// per CAT-13's own note that this was the plan all along -- one
+// TransactionEditDialog instance is mounted once below, not one per
+// row, and whichever row is clicked becomes its `transaction` prop.
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { Pencil } from "lucide-react";
 import type { TransactionListItem } from "../api/transactions";
-import { useSetMerchantNameOverrideMutation } from "../api/transactions";
 import { Badge } from "./ui/badge";
-import { Input } from "./ui/input";
 import { accountDisplayName } from "../lib/accountDisplayName";
 import { formatCents } from "../lib/money";
-
-/** CAT-13: click-to-edit merchant name. Enter/blur saves, Escape cancels;
- * an empty save clears the override back to
- * `merchantName ?? merchantNameNormalized` (the API's own
- * empty-string-clears convention). */
-function MerchantCell({ item }: { item: TransactionListItem }) {
-  const setOverride = useSetMerchantNameOverrideMutation();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(item.merchantName);
-
-  function startEditing(): void {
-    setDraft(item.merchantName);
-    setEditing(true);
-  }
-
-  function save(): void {
-    const trimmed = draft.trim();
-    if (trimmed !== item.merchantName) {
-      setOverride.mutate({ transactionId: item.id, merchantNameOverride: trimmed });
-    }
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <Input
-        autoFocus
-        className="h-7 w-40 text-xs"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") save();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        onBlur={save}
-        aria-label={`Merchant name for ${item.merchantName}`}
-      />
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      className="group inline-flex items-center gap-1.5 text-left text-ink"
-      onClick={startEditing}
-      title="Click to rename this merchant"
-    >
-      {item.merchantName}
-      {item.pending && (
-        <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">
-          Pending
-        </span>
-      )}
-      <span className="text-[11px] font-normal text-ink-muted underline decoration-dotted opacity-0 group-hover:opacity-100">
-        Rename
-      </span>
-    </button>
-  );
-}
+import { TransactionEditDialog } from "./TransactionEditDialog";
 
 // WEB-12: Plaid's raw sign (amount > 0 = expense, amount < 0 = income --
 // WEB-9's convention, untouched) is correct for the *color* below, but
@@ -114,6 +58,11 @@ export interface TransactionsTableProps {
 }
 
 export function TransactionsTable({ items, renderRowAction }: TransactionsTableProps) {
+  // CAT-12: which row's popup is open, or null -- one TransactionEditDialog
+  // instance below, pointed at whichever row was clicked, rather than one
+  // per row.
+  const [editingItem, setEditingItem] = useState<TransactionListItem | null>(null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[720px] border-collapse text-left text-sm">
@@ -129,12 +78,37 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
         </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={item.id} className="border-t border-border">
+            <tr
+              key={item.id}
+              // CAT-12: "click any row" opens the edit popup. tabIndex/role/
+              // onKeyDown make it keyboard-reachable too, not just a mouse
+              // affordance -- the same bar the standalone MerchantCell button
+              // this replaces already met.
+              tabIndex={0}
+              role="button"
+              aria-label={`Edit transaction: ${item.merchantName}`}
+              onClick={() => setEditingItem(item)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") setEditingItem(item);
+              }}
+              className="group cursor-pointer border-t border-border hover:bg-surface-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/20"
+            >
               <td className="whitespace-nowrap px-2 py-2 text-ink-secondary">
                 {DATE_FORMAT.format(new Date(item.date))}
               </td>
               <td className="px-2 py-2 text-ink">
-                <MerchantCell item={item} />
+                <span className="inline-flex items-center gap-1.5">
+                  {item.merchantName}
+                  {item.pending && (
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+                      Pending
+                    </span>
+                  )}
+                  <Pencil
+                    className="h-3 w-3 flex-shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-hidden="true"
+                  />
+                </span>
               </td>
               <td className="px-2 py-2 text-ink-secondary">
                 {/* ACCT-3: was hardcoded to institutionName, so renaming an
@@ -152,7 +126,15 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
                   </Badge>
                 )}
               </td>
-              {renderRowAction && <td className="px-2 py-2">{renderRowAction(item)}</td>}
+              {renderRowAction && (
+                // CAT-12: this column's own control (ReviewCategoryControl's
+                // one-click dropdown, on the review queue) needs to keep
+                // working on its own terms -- stopped here so a click inside
+                // it doesn't also bubble up and open the row's edit popup.
+                <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+                  {renderRowAction(item)}
+                </td>
+              )}
               {/* WEB-9: Plaid's sign convention, not the intuitive one -- positive
                   amount = money leaving the account (an expense, red), negative =
                   money in (income/a credit, green). Same convention ANLY-5's
@@ -173,6 +155,12 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
           ))}
         </tbody>
       </table>
+      <TransactionEditDialog
+        transaction={editingItem}
+        onOpenChange={(open) => {
+          if (!open) setEditingItem(null);
+        }}
+      />
     </div>
   );
 }
