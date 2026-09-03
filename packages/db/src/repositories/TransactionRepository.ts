@@ -58,6 +58,14 @@ export interface TransactionPageOptions {
   /** WEB-10: exact match against `category.value` -- what
    * ANLY-14's Spending-page drill-down links to. */
   category?: string;
+  /** WEB-13: exact match against `accountId` -- what a Wallet card's
+   * click-through (ANLY-13's `/transactions?account=<id>`) filters to.
+   * Combined with the existing `userId` filter below (never in place of
+   * it), so a foreign accountId can't leak another user's transactions --
+   * it simply matches nothing, the same ownership-by-construction
+   * reasoning this repository's other user-scoped queries already rely
+   * on rather than a separate existence/ownership check. */
+  accountId?: string;
 }
 
 export interface TransactionPage {
@@ -141,27 +149,100 @@ export class TransactionRepository {
    * lets CAT-7's review queue reuse this exact method (`status:
    * "needs_review"`) instead of a second one. */
   async findPageForUser(userId: string, options: TransactionPageOptions): Promise<TransactionPage> {
-    const { page, pageSize, status, category, dateFrom, dateTo } = options;
+    const { page, pageSize, status, category, accountId, dateFrom, dateTo } = options;
     const skip = (page - 1) * pageSize;
 
     const dateFilter: { $gte?: Date; $lte?: Date } = {};
     if (dateFrom) dateFilter.$gte = dateFrom;
     if (dateTo) dateFilter.$lte = dateTo;
 
-    const docs = await TransactionModel.find({
-      userId,
-      isRemoved: false,
-      ...(status ? { "category.status": status } : {}),
-      ...(category ? { "category.value": category } : {}),
-      ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-    })
-      .sort({ date: -1 })
-      .skip(skip)
-      .limit(pageSize + 1)
-      .lean<TransactionDocument[]>();
+    try {
+      const docs = await TransactionModel.find({
+        userId,
+        isRemoved: false,
+        ...(status ? { "category.status": status } : {}),
+        ...(category ? { "category.value": category } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+      })
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(pageSize + 1)
+        .lean<TransactionDocument[]>();
 
-    const hasMore = docs.length > pageSize;
-    return { items: hasMore ? docs.slice(0, pageSize) : docs, hasMore };
+      const hasMore = docs.length > pageSize;
+      return { items: hasMore ? docs.slice(0, pageSize) : docs, hasMore };
+    } catch (err) {
+      // WEB-13: `accountId` is a client-supplied query param
+      // (routes/transactions.ts's `account` filter) fed straight into an
+      // ObjectId-typed field -- mongoose throws a CastError for anything
+      // that isn't a valid ObjectId shape rather than just not matching.
+      // Treated as "no results" (an empty page), the same
+      // CastError-to-null-equivalent tolerance
+      // updateCategoryForUser()/updateMerchantNameOverrideForUser() below
+      // already establish for a malformed id: the caller can't tell
+      // "malformed account id" from "no transactions for that account"
+      // apart anyway, and a list endpoint shouldn't 500 over it.
+      if (err instanceof Error && err.name === "CastError") {
+        return { items: [], hasMore: false };
+      }
+      throw err;
+    }
+  }
+
+  /** WEB-13: income/expense totals for the transactions ledger's stat
+   * row -- the same `{userId, isRemoved: false, excludeFromCashFlow: {$ne:
+   * true}}` exclusions getCategoryDistribution()/
+   * getIncomeCategoryDistribution() already use (an internal transfer
+   * between the user's own accounts is neither spending nor income),
+   * scoped to the same optional date window and `accountId` filter
+   * findPageForUser() above takes -- unlike that method, both bounds
+   * here are optional independently, since "no date filter" on the
+   * ledger means "totals across all history," not "totals for today."
+   * One aggregation with a single `$group` (`_id: null`) rather than two
+   * round trips, splitting on `amount`'s sign via `$cond` the same way
+   * getIncomeCategoryDistribution() negates its own `$sum` so the
+   * frontend never has to re-derive a sign flip. */
+  async getTransactionTotals(
+    userId: string,
+    options: { dateFrom?: Date; dateTo?: Date; accountId?: string },
+  ): Promise<{ income: number; expenses: number }> {
+    const { dateFrom, dateTo, accountId } = options;
+    const dateFilter: { $gte?: Date; $lte?: Date } = {};
+    if (dateFrom) dateFilter.$gte = dateFrom;
+    if (dateTo) dateFilter.$lte = dateTo;
+
+    try {
+      const [result] = await TransactionModel.aggregate<{ income: number; expenses: number }>([
+        {
+          $match: {
+            userId,
+            isRemoved: false,
+            excludeFromCashFlow: { $ne: true },
+            ...(accountId ? { accountId } : {}),
+            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            income: {
+              $sum: { $cond: [{ $lt: ["$amount", 0] }, { $multiply: ["$amount", -1] }, 0] },
+            },
+            expenses: { $sum: { $cond: [{ $gt: ["$amount", 0] }, "$amount", 0] } },
+          },
+        },
+        { $project: { _id: 0, income: 1, expenses: 1 } },
+      ]);
+      return result ?? { income: 0, expenses: 0 };
+    } catch (err) {
+      // Same malformed-accountId tolerance as findPageForUser() above --
+      // "no transactions matched" is the correct answer either way.
+      if (err instanceof Error && err.name === "CastError") {
+        return { income: 0, expenses: 0 };
+      }
+      throw err;
+    }
   }
 
   /** The Tier 4 review queue (ARCHITECTURE.md §2.3). */

@@ -794,6 +794,127 @@ describe("TransactionRepository", () => {
 
       expect(items.map((i) => i.providerTransactionId)).toEqual(["match"]);
     });
+
+    it("filters to an exact accountId match (WEB-13)", async () => {
+      const accountA = new mongoose.Types.ObjectId();
+      const accountB = new mongoose.Types.ObjectId();
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "a", accountId: accountA }));
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "b", accountId: accountB }));
+
+      const { items } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        accountId: accountA.toString(),
+      });
+
+      expect(items.map((i) => i.providerTransactionId)).toEqual(["a"]);
+    });
+
+    it("returns an empty page (not a throw) for a malformed accountId", async () => {
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "a" }));
+
+      const { items, hasMore } = await repo.findPageForUser("user-1", {
+        page: 1,
+        pageSize: 10,
+        accountId: "not-a-valid-object-id",
+      });
+
+      expect(items).toEqual([]);
+      expect(hasMore).toBe(false);
+    });
+  });
+
+  describe("getTransactionTotals", () => {
+    it("splits income and expenses, both returned as positive totals (WEB-13)", async () => {
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "paycheck", amount: -200_000 }));
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "groceries", amount: 4_000 }));
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "dining", amount: 2_500 }));
+
+      const totals = await repo.getTransactionTotals("user-1", {});
+      expect(totals).toEqual({ income: 200_000, expenses: 6_500 });
+    });
+
+    it("excludes transfer-matched transactions from both sides", async () => {
+      const matched = await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "internal", amount: -5_000 }),
+      );
+      await repo.applyTransferMatch("user-1", [matched._id.toString()], "group-1");
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "groceries", amount: 4_000 }));
+
+      const totals = await repo.getTransactionTotals("user-1", {});
+      expect(totals).toEqual({ income: 0, expenses: 4_000 });
+    });
+
+    it("excludes soft-removed transactions", async () => {
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "removed", amount: 4_000 }));
+      await repo.markRemoved("removed");
+
+      const totals = await repo.getTransactionTotals("user-1", {});
+      expect(totals).toEqual({ income: 0, expenses: 0 });
+    });
+
+    it("scopes to an inclusive dateFrom/dateTo window when given", async () => {
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "in-range",
+          date: new Date("2026-01-15"),
+          amount: 4_000,
+        }),
+      );
+      await repo.upsertFromSync(
+        baseInput({
+          providerTransactionId: "out-of-range",
+          date: new Date("2026-02-01"),
+          amount: 9_000,
+        }),
+      );
+
+      const totals = await repo.getTransactionTotals("user-1", {
+        dateFrom: new Date("2026-01-01"),
+        dateTo: new Date("2026-01-31"),
+      });
+      expect(totals).toEqual({ income: 0, expenses: 4_000 });
+    });
+
+    it("returns zero totals for a range with no matching transactions (no throw on the empty $group)", async () => {
+      const totals = await repo.getTransactionTotals("user-1", {});
+      expect(totals).toEqual({ income: 0, expenses: 0 });
+    });
+
+    it("scopes to an exact accountId match when given", async () => {
+      const accountA = new mongoose.Types.ObjectId();
+      const accountB = new mongoose.Types.ObjectId();
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "a", accountId: accountA, amount: 4_000 }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "b", accountId: accountB, amount: 9_000 }),
+      );
+
+      const totals = await repo.getTransactionTotals("user-1", { accountId: accountA.toString() });
+      expect(totals).toEqual({ income: 0, expenses: 4_000 });
+    });
+
+    it("returns zero totals (not a throw) for a malformed accountId", async () => {
+      await repo.upsertFromSync(baseInput({ providerTransactionId: "a", amount: 4_000 }));
+
+      const totals = await repo.getTransactionTotals("user-1", {
+        accountId: "not-a-valid-object-id",
+      });
+      expect(totals).toEqual({ income: 0, expenses: 0 });
+    });
+
+    it("is scoped to the requesting user", async () => {
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "mine", userId: "user-1", amount: 4_000 }),
+      );
+      await repo.upsertFromSync(
+        baseInput({ providerTransactionId: "theirs", userId: "user-2", amount: 9_000 }),
+      );
+
+      const totals = await repo.getTransactionTotals("user-1", {});
+      expect(totals).toEqual({ income: 0, expenses: 4_000 });
+    });
   });
 
   describe("updateMerchantNameOverrideForUser", () => {

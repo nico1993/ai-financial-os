@@ -14,6 +14,11 @@ export interface TransactionListItem {
   id: string;
   date: string; // ISO 8601, UTC
   merchantName: string;
+  /** WEB-13: the raw bank description, distinct from `merchantName`
+   * above -- see the API's own TransactionListItem (transactions/list.ts)
+   * for the full precedence explanation. Used by the transactions
+   * ledger's new secondary-muted-text row treatment. */
+  description: string;
   amount: number;
   isoCurrencyCode: string;
   pending: boolean;
@@ -58,6 +63,9 @@ export interface TransactionsQueryOptions {
   /** WEB-10: exact category name -- what ANLY-14's Spending-page
    * drill-down links here with. */
   category?: string;
+  /** WEB-13: exact accountId match -- what ANLY-13's Wallet-card
+   * click-through (`/transactions?account=<id>`) filters to. */
+  account?: string;
 }
 
 // Not under the ["analytics"] prefix ANLY-10's SSE client invalidates --
@@ -68,7 +76,7 @@ export interface TransactionsQueryOptions {
 // invalidates ["accounts"]), not something a dashboard-changed event has
 // any business also triggering.
 export function useTransactionsQuery(options: TransactionsQueryOptions) {
-  const { page, pageSize, status, dateFrom, dateTo, category } = options;
+  const { page, pageSize, status, dateFrom, dateTo, category, account } = options;
   return useQuery({
     queryKey: [
       "transactions",
@@ -78,6 +86,7 @@ export function useTransactionsQuery(options: TransactionsQueryOptions) {
       dateFrom ?? null,
       dateTo ?? null,
       category ?? null,
+      account ?? null,
     ],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page) });
@@ -86,12 +95,55 @@ export function useTransactionsQuery(options: TransactionsQueryOptions) {
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
       if (category) params.set("category", category);
+      if (account) params.set("account", account);
       return apiFetch<TransactionsPageResponse>(`/api/transactions?${params.toString()}`);
     },
     // Keeps the current page's rows on screen while the next page loads,
     // instead of the table flashing to a loading state on every click --
     // React Query v5's replacement for v4's `keepPreviousData: true`.
     placeholderData: keepPreviousData,
+  });
+}
+
+// -- WEB-13: the ledger's stat row -----------------------------------------
+
+export interface TransactionTotalsOptions {
+  dateFrom?: string;
+  dateTo?: string;
+  account?: string;
+}
+
+export interface TransactionTotalsResponse {
+  income: number;
+  expenses: number;
+}
+
+/** Totals for the exact same filtered view useTransactionsQuery() above
+ * renders -- a separate query (not derived from one page's items) since
+ * pagination means the current page is never the whole filtered set.
+ * Deliberately keyed with `"transactions"` as its own first queryKey
+ * element (not a sibling top-level key like `["analytics", ...]`'s own
+ * prefix) so React Query's existing partial-match invalidation already
+ * covers it for free: useCorrectCategoryMutation()/
+ * useUpdateTransactionMutation()/useLinkTransferMutation() below all
+ * invalidate the `["transactions"]` prefix wholesale already (a category
+ * correction or transfer link can change which side of income/expense a
+ * transaction falls on), and none of those three call sites needed to
+ * change to also catch this new query. */
+export function useTransactionTotalsQuery(options: TransactionTotalsOptions) {
+  const { dateFrom, dateTo, account } = options;
+  return useQuery({
+    queryKey: ["transactions", "totals", dateFrom ?? null, dateTo ?? null, account ?? null],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      if (account) params.set("account", account);
+      const query = params.toString();
+      return apiFetch<TransactionTotalsResponse>(
+        `/api/transactions/totals${query ? `?${query}` : ""}`,
+      );
+    },
   });
 }
 

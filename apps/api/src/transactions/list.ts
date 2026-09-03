@@ -18,6 +18,15 @@ export interface TransactionListItem {
   id: string;
   date: string; // ISO 8601, UTC
   merchantName: string;
+  /** WEB-13: the raw bank description (`Transaction.description`),
+   * distinct from `merchantName` above -- that field is the cleaned-up
+   * display name (CAT-13's own `merchantNameOverride ?? merchantName ??
+   * merchantNameNormalized` fallback); this is Plaid's original text,
+   * unedited, for the transactions ledger's new secondary-muted-text
+   * row treatment. Always present (`Transaction.description` is a
+   * required field, packages/db's own model), unlike `merchantName`
+   * which Plaid sometimes omits. */
+  description: string;
   amount: number;
   isoCurrencyCode: string;
   pending: boolean;
@@ -87,6 +96,7 @@ export function buildTransactionList(
         transaction.merchantNameOverride ??
         transaction.merchantName ??
         transaction.merchantNameNormalized,
+      description: transaction.description,
       amount: transaction.amount,
       isoCurrencyCode: transaction.isoCurrencyCode,
       pending: transaction.pending,

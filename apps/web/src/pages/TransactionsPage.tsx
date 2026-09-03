@@ -20,18 +20,38 @@
 // changes it, since nothing else needs to observe it (a plain refresh
 // losing an in-progress filter is an acceptable trade for not adding
 // history-entry-per-keystroke noise).
-import { useState } from "react";
+//
+// WEB-13 adds: (1) a new `account` filter dimension, read the same
+// once-on-mount way as category/dateFrom/dateTo above -- ANLY-13's
+// Wallet-card click-through (`/transactions?account=<id>`) is this
+// param's one producer today. A plain native `<select>` rather than
+// CategorySelect.tsx -- accounts have no icon/color to render, so the
+// extra Radix machinery that component exists for doesn't apply here.
+// Appended to WEB-10's existing filter row rather than touching any of
+// its existing controls, per this ticket's own explicit instruction. (2)
+// A stat row (Current Wallet Balance, Total Period Change, Total Period
+// Expenses, Total Period Income -- this exact order per the ticket's own
+// text) sourced from useAccountsQuery() (balance) and the new
+// useTransactionTotalsQuery() (the other three, scoped to the same
+// filters as the list below). (3) TransactionsTable.tsx swapped for the
+// new TransactionsLedger.tsx (day-grouped, larger category-icon avatars)
+// -- see that component's own file header for why this is a new
+// component rather than a rewrite of the shared one.
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useTransactionsQuery } from "../api/transactions";
+import { useTransactionsQuery, useTransactionTotalsQuery } from "../api/transactions";
 import { useCategoriesQuery } from "../api/categories";
+import { useAccountsQuery } from "../api/accounts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { TransactionsTable } from "../components/TransactionsTable";
+import { TransactionsLedger } from "../components/TransactionsLedger";
 import { Button } from "../components/ui/button";
 import { DateRangeControls } from "../components/DateRangeControls";
 import { currentCalendarMonthRange } from "../lib/dateRange";
 import type { DateRangeValue } from "../lib/dateRange";
 import { CategorySelect } from "../components/CategorySelect";
 import type { CategorySelectOption } from "../components/CategorySelect";
+import { accountDisplayName } from "../lib/accountDisplayName";
+import { formatCents, formatSignedCents } from "../lib/money";
 
 const PAGE_SIZE = 50;
 const EMPTY_RANGE: DateRangeValue = { start: "", end: "" };
@@ -43,9 +63,10 @@ const EMPTY_RANGE: DateRangeValue = { start: "", end: "" };
 const ALL_CATEGORIES_OPTION: CategorySelectOption = { value: "", label: "All categories" };
 
 export default function TransactionsPage() {
-  // ANLY-14: read once, on mount -- a Link with query params navigating
-  // here should pre-apply the filter, but this page doesn't need to keep
-  // tracking the URL after that (see the file comment above).
+  // ANLY-14/WEB-13: read once, on mount -- a Link with query params
+  // navigating here should pre-apply the filter, but this page doesn't
+  // need to keep tracking the URL after that (see the file comment
+  // above).
   const [searchParams] = useSearchParams();
   const [page, setPage] = useState(1);
   const [range, setRange] = useState<DateRangeValue>(() => ({
@@ -53,14 +74,22 @@ export default function TransactionsPage() {
     end: searchParams.get("dateTo") ?? "",
   }));
   const [category, setCategory] = useState(() => searchParams.get("category") ?? "");
+  const [account, setAccount] = useState(() => searchParams.get("account") ?? "");
 
   const categories = useCategoriesQuery();
+  const accounts = useAccountsQuery();
   const query = useTransactionsQuery({
     page,
     pageSize: PAGE_SIZE,
     dateFrom: range.start || undefined,
     dateTo: range.end || undefined,
     category: category || undefined,
+    account: account || undefined,
+  });
+  const totals = useTransactionTotalsQuery({
+    dateFrom: range.start || undefined,
+    dateTo: range.end || undefined,
+    account: account || undefined,
   });
 
   function updateRange(next: DateRangeValue): void {
@@ -73,13 +102,40 @@ export default function TransactionsPage() {
     setPage(1);
   }
 
-  const hasActiveFilter = Boolean(range.start || range.end || category);
+  function updateAccount(next: string): void {
+    setAccount(next);
+    setPage(1);
+  }
+
+  const hasActiveFilter = Boolean(range.start || range.end || category || account);
 
   function clearFilters(): void {
     setRange(EMPTY_RANGE);
     setCategory("");
+    setAccount("");
     setPage(1);
   }
+
+  // WEB-13: "Current Wallet Balance" when no account filter is applied --
+  // the sum across every linked account. BACKLOG.md's own ticket text
+  // flags this specific reading as an unconfirmed guess ("probably the
+  // sum across all accounts, but confirm"), not a settled spec -- see
+  // this ticket's own delivered note.
+  const currentWalletBalance = useMemo(() => {
+    if (!accounts.data) return undefined;
+    if (account) {
+      return accounts.data.find((a) => a.id === account)?.currentBalance;
+    }
+    return accounts.data.reduce((sum, a) => sum + a.currentBalance, 0);
+  }, [accounts.data, account]);
+
+  // "Total Period Change" = income - expenses for the same filtered
+  // window -- the same net-cash-flow definition ANLY-13's Overview page
+  // uses for its own period stat, not a balance-history delta (see
+  // OverviewPage.tsx's file header for the full reasoning this carries
+  // over).
+  const periodChange =
+    totals.data !== undefined ? totals.data.income - totals.data.expenses : undefined;
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-6">
@@ -88,6 +144,25 @@ export default function TransactionsPage() {
         <p className="text-sm text-ink-secondary">
           Every transaction across your linked accounts, most recent first.
         </p>
+      </div>
+
+      <div className="flex flex-wrap gap-4">
+        <Stat
+          label="Current wallet balance"
+          value={currentWalletBalance !== undefined ? formatCents(currentWalletBalance) : "—"}
+        />
+        <Stat
+          label="Total period change"
+          value={periodChange !== undefined ? formatSignedCents(periodChange) : "—"}
+        />
+        <Stat
+          label="Total period expenses"
+          value={totals.data ? formatCents(totals.data.expenses) : "—"}
+        />
+        <Stat
+          label="Total period income"
+          value={totals.data ? formatCents(totals.data.income) : "—"}
+        />
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -115,6 +190,25 @@ export default function TransactionsPage() {
               })),
             ]}
           />
+        </label>
+        {/* WEB-13: the one new filter dimension this ticket adds --
+            WEB-10's filters above are otherwise untouched, per this
+            ticket's own explicit instruction not to deviate on them. */}
+        <label className="flex flex-col gap-1 text-xs font-medium text-ink">
+          Account
+          <select
+            value={account}
+            onChange={(e) => updateAccount(e.target.value)}
+            aria-label="Filter by account"
+            className="h-8 rounded-md border border-border bg-surface-secondary px-2 text-xs text-ink focus-visible:border-ink focus-visible:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/20"
+          >
+            <option value="">All accounts</option>
+            {(accounts.data ?? []).map((a) => (
+              <option key={a.id} value={a.id}>
+                {accountDisplayName(a)}
+              </option>
+            ))}
+          </select>
         </label>
         {hasActiveFilter && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
@@ -146,7 +240,7 @@ export default function TransactionsPage() {
           )}
           {query.data && query.data.items.length > 0 && (
             <>
-              <TransactionsTable items={query.data.items} />
+              <TransactionsLedger items={query.data.items} categories={categories.data ?? []} />
               <div className="mt-4 flex items-center justify-between">
                 <span className="text-xs text-ink-muted">Page {page}</span>
                 <div className="flex gap-2">
@@ -172,6 +266,15 @@ export default function TransactionsPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface px-4 py-3">
+      <div className="text-[10px] uppercase tracking-wide text-ink-muted">{label}</div>
+      <div className="font-mono text-lg font-medium tabular-nums text-ink">{value}</div>
     </div>
   );
 }

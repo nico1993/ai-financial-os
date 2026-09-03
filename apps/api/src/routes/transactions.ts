@@ -126,6 +126,29 @@ const pageQuerySchema = z.object({
   dateFrom: dateStringSchema.optional(),
   dateTo: dateStringSchema.optional(),
   category: z.string().trim().min(1).optional(),
+  // WEB-13: an exact accountId match -- what ANLY-13's Wallet-card
+  // click-through (`/transactions?account=<id>`) filters to. Not
+  // validated as a strict ObjectId shape here (unlike `dateFrom`/`dateTo`
+  // above) -- same as the PATCH route's own `:id` param schema below,
+  // this app's convention is to let a malformed id reach the repository
+  // layer and rely on its own CastError-to-empty-result tolerance
+  // (TransactionRepository.findPageForUser()'s own doc comment) rather
+  // than duplicating an ObjectId regex at every boundary that takes one.
+  account: z.string().min(1).optional(),
+});
+
+// WEB-13: the transactions ledger's stat row needs totals for the exact
+// same filtered view the list above renders, but is its own aggregate
+// query (TransactionRepository.getTransactionTotals()) rather than
+// something derivable from one page of results -- pagination means the
+// current page's rows are never the whole filtered set. Reuses
+// pageQuerySchema's own dateFrom/dateTo/account validation rather than
+// re-declaring it (page/pageSize/status/category are meaningless here,
+// so `.pick()` rather than the whole shape).
+const totalsQuerySchema = pageQuerySchema.pick({
+  dateFrom: true,
+  dateTo: true,
+  account: true,
 });
 
 export async function registerTransactionRoutes(app: FastifyInstance): Promise<void> {
@@ -135,7 +158,7 @@ export async function registerTransactionRoutes(app: FastifyInstance): Promise<v
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid query" });
     }
     const userId = req.session.userId as string;
-    const { page, pageSize, status, dateFrom, dateTo, category } = parsed.data;
+    const { page, pageSize, status, dateFrom, dateTo, category, account } = parsed.data;
 
     // Accounts are looked up wholesale (findByUserId(), not per-transaction)
     // -- same reasoning as routes/accounts.ts: a user has a handful of
@@ -147,6 +170,7 @@ export async function registerTransactionRoutes(app: FastifyInstance): Promise<v
         pageSize,
         status,
         category,
+        accountId: account,
         dateFrom: dateFrom ? new Date(dateFrom) : undefined,
         dateTo: dateTo ? new Date(dateTo) : undefined,
       }),
@@ -159,6 +183,25 @@ export async function registerTransactionRoutes(app: FastifyInstance): Promise<v
       pageSize,
       hasMore,
     });
+  });
+
+  // WEB-13: see totalsQuerySchema's own comment above for why this is a
+  // separate route rather than folded into the list response above.
+  app.get("/api/transactions/totals", { preHandler: requireAuth }, async (req, reply) => {
+    const parsed = totalsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid query" });
+    }
+    const userId = req.session.userId as string;
+    const { dateFrom, dateTo, account } = parsed.data;
+
+    const totals = await transactionRepo.getTransactionTotals(userId, {
+      accountId: account,
+      dateFrom: dateFrom ? new Date(dateFrom) : undefined,
+      dateTo: dateTo ? new Date(dateTo) : undefined,
+    });
+
+    return reply.send(totals);
   });
 
   // CAT-7: manual Tier 4 correction (category), broadened by CAT-13 to

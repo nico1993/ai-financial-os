@@ -176,6 +176,20 @@ describe("buildTransactionList", () => {
     });
   });
 
+  it("WEB-13: passes through the raw description unchanged, distinct from merchantName", () => {
+    const acct = account();
+    const txn = transaction({
+      accountId: acct._id,
+      merchantName: "Trader Joe's",
+      description: "TRADER JOE S #123 ANYTOWN US",
+    });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.description).toBe("TRADER JOE S #123 ANYTOWN US");
+    expect(item?.merchantName).toBe("Trader Joe's");
+  });
+
   it("XFER-7: flags a TRANSFER_-prefixed providerCategory as a transfer candidate", () => {
     const acct = account();
     const txn = transaction({

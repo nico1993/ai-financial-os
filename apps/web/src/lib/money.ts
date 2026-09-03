@@ -32,3 +32,20 @@ export function formatAmountDisplay(amount: number): string {
   if (amount === 0) return formatCents(0);
   return amount > 0 ? `-${formatCents(Math.abs(amount))}` : formatCents(Math.abs(amount));
 }
+
+// WEB-13: an explicit-sign dollar delta -- "+$2,276.93" for a net-positive
+// day, "-$340.12" for net-negative -- for the transactions ledger's
+// per-day net-total header and its "Total Period Change" stat.
+// Deliberately the OPPOSITE input convention from formatAmountDisplay()
+// above: that function's input is still Transaction.amount's raw Plaid
+// sign (positive = expense), which it flips for display. This function's
+// input is already an ordinary signed delta (positive = gained money,
+// negative = lost money) -- a caller summing raw transaction amounts into
+// a net total has already negated that sum itself (Plaid: amount > 0 =
+// money leaving) before calling this, the same flip
+// getIncomeCategoryDistribution() applies server-side so an "Income"
+// figure never displays as negative.
+export function formatSignedCents(cents: number): string {
+  if (cents === 0) return formatCents(0);
+  return cents > 0 ? `+${formatCents(cents)}` : `-${formatCents(Math.abs(cents))}`;
+}
