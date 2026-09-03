@@ -21,6 +21,7 @@ import type { TransactionListItem } from "../api/transactions";
 import { useSetMerchantNameOverrideMutation } from "../api/transactions";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
+import { accountDisplayName } from "../lib/accountDisplayName";
 import { formatCents } from "../lib/money";
 
 /** CAT-13: click-to-edit merchant name. Enter/blur saves, Escape cancels;
@@ -136,7 +137,9 @@ export function TransactionsTable({ items, renderRowAction }: TransactionsTableP
                 <MerchantCell item={item} />
               </td>
               <td className="px-2 py-2 text-ink-secondary">
-                {item.account.institutionName}
+                {/* ACCT-3: was hardcoded to institutionName, so renaming an
+                    account (ACCT-1) never showed up here. */}
+                {accountDisplayName(item.account)}
                 {item.account.subtype && (
                   <span className="text-ink-muted"> · {item.account.subtype}</span>
                 )}

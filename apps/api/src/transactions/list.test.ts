@@ -100,6 +100,33 @@ describe("buildTransactionList", () => {
     expect(item?.merchantName).toBe("Weekly groceries");
   });
 
+  it("ACCT-3: joins through officialName/nickname when the account has them", () => {
+    const acct = account({
+      institutionName: "Chase",
+      officialName: "Chase Total Checking",
+      nickname: "Everyday spending",
+    });
+    const txn = transaction({ accountId: acct._id });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.account).toMatchObject({
+      institutionName: "Chase",
+      officialName: "Chase Total Checking",
+      nickname: "Everyday spending",
+    });
+  });
+
+  it("ACCT-3: officialName/nickname are undefined, not thrown, when the account never set them", () => {
+    const acct = account({ institutionName: "Chase" });
+    const txn = transaction({ accountId: acct._id });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.account.officialName).toBeUndefined();
+    expect(item?.account.nickname).toBeUndefined();
+  });
+
   it("falls back to a placeholder account when accountId matches nothing passed in", () => {
     const orphan = transaction({ accountId: new mongoose.Types.ObjectId() });
 

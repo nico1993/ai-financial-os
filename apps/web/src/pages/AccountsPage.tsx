@@ -25,6 +25,7 @@ import {
 } from "../api/accounts";
 import type { AccountListItem } from "../api/accounts";
 import { getApiErrorMessage } from "../api/client";
+import { accountDisplayName } from "../lib/accountDisplayName";
 import { formatCents } from "../lib/money";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -33,13 +34,6 @@ const CONNECTION_STATUS_LABEL: Record<string, string> = {
   login_required: "Needs reconnect",
   error: "Connection error",
 };
-
-/** ACCT-1: the account's display name -- a user-set nickname wins,
- * falling back to Plaid's own naming (`officialName`, then, since even
- * that's optional on some account types, the institution name). */
-function accountDisplayName(account: AccountListItem): string {
-  return account.nickname ?? account.officialName ?? account.institutionName;
-}
 
 /** ACCT-1: inline rename control -- click the name to edit it in place,
  * Enter/blur to save, Escape to cancel. An empty save clears the

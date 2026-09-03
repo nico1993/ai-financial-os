@@ -22,6 +22,15 @@ export interface TransactionListItem {
     id: string;
     institutionName: string;
     subtype: string;
+    /** ACCT-3: an Account's `officialName`/`nickname` (ACCT-1's
+     * user-chosen display name) were joined in for /accounts but never
+     * for /transactions, so renaming an account here had zero visible
+     * effect on this page. Display precedence stays the frontend's job
+     * (`nickname ?? officialName ?? institutionName`, mirroring
+     * accounts/list.ts's buildAccountList()) -- this just stops dropping
+     * the fields on the floor. */
+    officialName?: string;
+    nickname?: string;
   };
 }
 
@@ -71,6 +80,8 @@ export function buildTransactionList(
         id: accountId,
         institutionName: account?.institutionName ?? "Unknown account",
         subtype: account?.subtype ?? "",
+        officialName: account?.officialName,
+        nickname: account?.nickname,
       },
     };
   });

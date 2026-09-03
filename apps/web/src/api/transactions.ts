@@ -25,6 +25,11 @@ export interface TransactionListItem {
     id: string;
     institutionName: string;
     subtype: string;
+    /** ACCT-3: mirrors the API's TransactionListItem -- see
+     * lib/accountDisplayName.ts for the `nickname ?? officialName ??
+     * institutionName` precedence used to render these. */
+    officialName?: string;
+    nickname?: string;
   };
 }
 
