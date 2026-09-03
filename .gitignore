@@ -12,3 +12,16 @@ build/
 *.log
 .DS_Store
 coverage/
+# XFER-7: this logic moved to packages/shared/src/transferMatching.ts.
+# These two files are stale bytes this session's sandbox could not
+# actually delete (its device-bridge shell blocks unlink() on the
+# mounted repo filesystem -- git itself hits the exact same wall
+# cleaning up its own lock files, see any commit message from this
+# session for the full story) -- untracked via `git update-index
+# --force-remove` instead of a real `git rm`, then ignored here so they
+# stop showing as "??" clutter in every status/diff. Safe to
+# `rm -rf apps/worker/src/transfer/` for real next time this repo is
+# open somewhere without that restriction; nothing references this
+# path anymore (apps/worker/src/queues/transferMatching.ts imports the
+# relocated version from @financial-os/shared now).
+apps/worker/src/transfer/

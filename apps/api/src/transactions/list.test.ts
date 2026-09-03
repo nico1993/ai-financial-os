@@ -175,4 +175,42 @@ describe("buildTransactionList", () => {
       category: { value: "Uncategorized", status: "needs_review" },
     });
   });
+
+  it("XFER-7: flags a TRANSFER_-prefixed providerCategory as a transfer candidate", () => {
+    const acct = account();
+    const txn = transaction({
+      accountId: acct._id,
+      providerCategory: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+    });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.isTransferCandidate).toBe(true);
+  });
+
+  it("XFER-7: flags the credit-card-payment providerCategory as a transfer candidate too", () => {
+    const acct = account();
+    const txn = transaction({
+      accountId: acct._id,
+      providerCategory: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+    });
+
+    const [item] = buildTransactionList([txn], [acct]);
+
+    expect(item?.isTransferCandidate).toBe(true);
+  });
+
+  it("XFER-7: an ordinary providerCategory, or none at all, is not a transfer candidate", () => {
+    const acct = account();
+    const ordinary = transaction({
+      accountId: acct._id,
+      providerCategory: "FOOD_AND_DRINK_GROCERIES",
+    });
+    const none = transaction({ accountId: acct._id, providerCategory: undefined });
+
+    const items = buildTransactionList([ordinary, none], [acct]);
+
+    expect(items[0]?.isTransferCandidate).toBe(false);
+    expect(items[1]?.isTransferCandidate).toBe(false);
+  });
 });

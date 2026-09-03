@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   findTransferMatches,
   isTransferSignalCategory,
+  suggestTransferCandidates,
   type TransferCandidateTransaction,
-} from "./matching.js";
+} from "./transferMatching.js";
 
 function tx(
   overrides: Partial<TransferCandidateTransaction> & { id: string },
@@ -265,5 +266,115 @@ describe("findTransferMatches", () => {
 
   it("returns no matches for an empty candidate list", () => {
     expect(findTransferMatches([], OPTIONS)).toEqual([]);
+  });
+});
+
+// XFER-7: suggestTransferCandidates() shares no code with
+// findTransferMatches() above (see this function's own doc comment for
+// why), so its constraint checks -- opposite sign, different account,
+// both tolerances -- get their own coverage here rather than assuming
+// findTransferMatches()'s tests already exercise the same lines.
+describe("suggestTransferCandidates", () => {
+  it("ranks candidates closest-date-first", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const far = tx({
+      id: "far",
+      accountId: "savings",
+      amount: 5000,
+      date: new Date("2026-01-12T00:00:00.000Z"),
+    });
+    const near = tx({
+      id: "near",
+      accountId: "savings",
+      amount: 5000,
+      date: new Date("2026-01-11T00:00:00.000Z"),
+    });
+
+    const result = suggestTransferCandidates(anchor, [far, near], OPTIONS);
+    expect(result.map((c) => c.id)).toEqual(["near", "far"]);
+  });
+
+  it("breaks a date tie by closest amount", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const exact = tx({ id: "exact", accountId: "savings", amount: 5000 });
+    const withFee = tx({ id: "with-fee", accountId: "savings", amount: 4950 });
+
+    const result = suggestTransferCandidates(anchor, [withFee, exact], OPTIONS);
+    expect(result.map((c) => c.id)).toEqual(["exact", "with-fee"]);
+  });
+
+  it("excludes the anchor itself even if it's present in the pool", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const result = suggestTransferCandidates(anchor, [anchor], OPTIONS);
+    expect(result).toEqual([]);
+  });
+
+  it("excludes a same-account candidate", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const sameAccount = tx({ id: "same", accountId: "checking", amount: 5000 });
+    expect(suggestTransferCandidates(anchor, [sameAccount], OPTIONS)).toEqual([]);
+  });
+
+  it("excludes a same-sign candidate", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const sameSign = tx({ id: "same-sign", accountId: "savings", amount: -5000 });
+    expect(suggestTransferCandidates(anchor, [sameSign], OPTIONS)).toEqual([]);
+  });
+
+  it("excludes a candidate beyond the amount tolerance", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const tooFar = tx({ id: "too-far", accountId: "savings", amount: 4800 });
+    expect(suggestTransferCandidates(anchor, [tooFar], OPTIONS)).toEqual([]);
+  });
+
+  it("excludes a candidate beyond the date tolerance", () => {
+    const anchor = tx({
+      id: "out",
+      accountId: "checking",
+      amount: -5000,
+      date: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const tooLate = tx({
+      id: "too-late",
+      accountId: "savings",
+      amount: 5000,
+      date: new Date("2026-01-10T00:00:00.000Z"),
+    });
+    expect(suggestTransferCandidates(anchor, [tooLate], OPTIONS)).toEqual([]);
+  });
+
+  it("excludes a zero-amount candidate, and a zero-amount anchor matches nothing", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const zero = tx({ id: "zero", accountId: "savings", amount: 0 });
+    expect(suggestTransferCandidates(anchor, [zero], OPTIONS)).toEqual([]);
+
+    const zeroAnchor = tx({ id: "zero-anchor", accountId: "checking", amount: 0 });
+    const wouldOtherwiseMatch = tx({ id: "in", accountId: "savings", amount: 5000 });
+    expect(suggestTransferCandidates(zeroAnchor, [wouldOtherwiseMatch], OPTIONS)).toEqual([]);
+  });
+
+  it("does not require the anchor itself to carry a transfer signal", () => {
+    // Unlike findTransferMatches()'s own anchor-selection filter -- this
+    // function's caller already knows which transaction it's suggesting
+    // candidates for, so it shouldn't also have to carry
+    // isTransferSignalCategory()'s own signal for a suggestion to work.
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000, providerCategory: undefined });
+    const candidate = tx({ id: "in", accountId: "savings", amount: 5000 });
+    expect(suggestTransferCandidates(anchor, [candidate], OPTIONS).map((c) => c.id)).toEqual([
+      "in",
+    ]);
+  });
+
+  it("returns every viable candidate, not just the single best one", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    const in1 = tx({ id: "in-1", accountId: "savings", amount: 5000 });
+    const in2 = tx({ id: "in-2", accountId: "savings", amount: 5000 });
+    const result = suggestTransferCandidates(anchor, [in1, in2], OPTIONS);
+    expect(result.map((c) => c.id).sort()).toEqual(["in-1", "in-2"]);
+  });
+
+  it("returns an empty list against an empty pool", () => {
+    const anchor = tx({ id: "out", accountId: "checking", amount: -5000 });
+    expect(suggestTransferCandidates(anchor, [], OPTIONS)).toEqual([]);
   });
 });

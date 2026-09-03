@@ -6,8 +6,11 @@ import { Queue } from "bullmq";
 import {
   QUEUE_NAMES,
   enqueueProviderSync,
+  enqueueRollup,
   type ProviderSyncJobData,
   type ProviderSyncJobOptions,
+  type RollupJobData,
+  type RollupJobOptions,
 } from "@financial-os/shared";
 import { getQueueConnection } from "./redis.js";
 
@@ -18,6 +21,15 @@ function getProviderSyncQueue(): Queue<ProviderSyncJobData> {
     connection: getQueueConnection(),
   });
   return providerSyncQueue;
+}
+
+let rollupQueue: Queue<RollupJobData> | undefined;
+
+function getRollupQueue(): Queue<RollupJobData> {
+  rollupQueue ??= new Queue<RollupJobData>(QUEUE_NAMES.rollups, {
+    connection: getQueueConnection(),
+  });
+  return rollupQueue;
 }
 
 /**
@@ -40,7 +52,33 @@ export async function requestProviderSync(connectionId: string): Promise<void> {
   await enqueueProviderSync(queue, connectionId);
 }
 
+/**
+ * XFER-7: requests a targeted rollup recompute after a manual transfer
+ * link (ADR-0008) -- the same signal apps/worker/src/queues/
+ * transferMatching.ts's own automated matching pass already emits for
+ * exactly this reason (linking sets excludeFromCashFlow, which stales a
+ * MonthlyRollup already computed for that bucket). routes/transactions.ts's
+ * link-transfer route is the only apps/api write that ever sets
+ * excludeFromCashFlow, so it's the only call site that needs this.
+ */
+export async function requestRollup(
+  userId: string,
+  dayBuckets: readonly Date[],
+  monthBuckets: readonly Date[],
+): Promise<void> {
+  const queue = getRollupQueue() as unknown as {
+    add(
+      name: string,
+      data: RollupJobData,
+      opts: RollupJobOptions,
+    ): Promise<{ id?: string | null } | null>;
+  };
+  await enqueueRollup(queue, userId, dayBuckets, monthBuckets);
+}
+
 export async function closeQueues(): Promise<void> {
   await providerSyncQueue?.close();
   providerSyncQueue = undefined;
+  await rollupQueue?.close();
+  rollupQueue = undefined;
 }

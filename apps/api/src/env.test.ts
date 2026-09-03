@@ -64,4 +64,18 @@ describe("loadEnv", () => {
   it("coerces PORT from its string form", () => {
     expect(loadEnv(baseEnv({ PORT: "8080" })).PORT).toBe(8080);
   });
+
+  it("XFER-7: defaults the transfer-match tolerances to the same values apps/worker uses", () => {
+    const parsed = loadEnv(baseEnv());
+    expect(parsed.XFER_MATCH_DATE_TOLERANCE_DAYS).toBe(3);
+    expect(parsed.XFER_MATCH_AMOUNT_TOLERANCE_CENTS).toBe(100);
+  });
+
+  it("XFER-7: coerces the transfer-match tolerances from their string form", () => {
+    const parsed = loadEnv(
+      baseEnv({ XFER_MATCH_DATE_TOLERANCE_DAYS: "5", XFER_MATCH_AMOUNT_TOLERANCE_CENTS: "250" }),
+    );
+    expect(parsed.XFER_MATCH_DATE_TOLERANCE_DAYS).toBe(5);
+    expect(parsed.XFER_MATCH_AMOUNT_TOLERANCE_CENTS).toBe(250);
+  });
 });

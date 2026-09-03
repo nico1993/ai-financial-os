@@ -5,7 +5,14 @@
 // from the route handler and test-first for the same reason: AGENTS.md's
 // convention for pure-logic stories, and this join has the same kind of
 // edge case worth pinning down on purpose.
+//
+// XFER-7 added isTransferCandidate (below) -- not a Transaction+Account
+// join like everything else here, just a resolved boolean over
+// Transaction's own providerCategory (@financial-os/shared's
+// isTransferSignalCategory()), sent as a plain field so ReviewPage.tsx
+// doesn't need its own copy of Plaid's transfer-taxonomy check.
 import type { AccountDocument, TransactionDocument } from "@financial-os/db";
+import { isTransferSignalCategory } from "@financial-os/shared";
 
 export interface TransactionListItem {
   id: string;
@@ -32,6 +39,17 @@ export interface TransactionListItem {
     officialName?: string;
     nickname?: string;
   };
+  /** XFER-7: true when `providerCategory` carries a transfer/payment-type
+   * signal (`isTransferSignalCategory()`, @financial-os/shared) --
+   * resolved server-side rather than shipping the raw Plaid taxonomy
+   * string to the frontend, the same "send a resolved view-model field,
+   * not the raw data the frontend would have to interpret" choice this
+   * function already makes for `merchantName`. The review queue
+   * (ReviewPage.tsx) uses this to decide whether a `needs_review` row
+   * gets the plain category-correction control or the "confirm external /
+   * link transfer" choice. Meaningless (but harmless) on a row that isn't
+   * `needs_review` -- nothing reads it there today. */
+  isTransferCandidate: boolean;
 }
 
 /**
@@ -83,6 +101,7 @@ export function buildTransactionList(
         officialName: account?.officialName,
         nickname: account?.nickname,
       },
+      isTransferCandidate: isTransferSignalCategory(transaction.providerCategory),
     };
   });
 }

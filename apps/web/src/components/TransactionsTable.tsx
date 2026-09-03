@@ -24,22 +24,8 @@ import { Pencil } from "lucide-react";
 import type { TransactionListItem } from "../api/transactions";
 import { Badge } from "./ui/badge";
 import { accountDisplayName } from "../lib/accountDisplayName";
-import { formatCents } from "../lib/money";
+import { formatAmountDisplay } from "../lib/money";
 import { TransactionEditDialog } from "./TransactionEditDialog";
-
-// WEB-12: Plaid's raw sign (amount > 0 = expense, amount < 0 = income --
-// WEB-9's convention, untouched) is correct for the *color* below, but
-// pairing that with formatCents(item.amount)'s raw signed digits was
-// backwards from how every consumer finance app actually displays an
-// amount: an expense should carry the minus sign, income should not.
-// This only flips what's rendered as text -- item.amount itself, and
-// every other reader of Transaction.amount (matching.ts, ANLY-5's
-// spending filter, the color class two lines below), keeps using
-// Plaid's real signed value untouched.
-function formatAmountDisplay(amount: number): string {
-  if (amount === 0) return formatCents(0);
-  return amount > 0 ? `-${formatCents(Math.abs(amount))}` : formatCents(Math.abs(amount));
-}
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
   month: "short",

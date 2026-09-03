@@ -1,21 +1,23 @@
 // transferMatching.ts — transfer-matching queue glue (XFER-2..XFER-5,
-// ARCHITECTURE.md §2.4, ADR-0006, ADR-0029). Queue glue only, same
-// discipline as categorizeLlm.ts/providerSync.ts: the actual matching
-// decision lives in ../transfer/matching.ts, testable without a Redis or
-// a database.
+// XFER-7, ARCHITECTURE.md §2.4, ADR-0006, ADR-0029). Queue glue only,
+// same discipline as categorizeLlm.ts/providerSync.ts: the actual
+// matching decision lives in @financial-os/shared's transferMatching.ts
+// (relocated there by XFER-7 so apps/api's suggest-candidates route can
+// reuse it too), testable without a Redis or a database.
 import { randomUUID } from "node:crypto";
 import { Queue, Worker, type Job } from "bullmq";
 import { TransactionRepository } from "@financial-os/db";
 import {
   QUEUE_NAMES,
   enqueueTransferMatching,
+  findTransferMatches,
+  isTransferSignalCategory,
   type TransferMatchingJobData,
   type TransferMatchingQueueLike,
 } from "@financial-os/shared";
 import { env } from "../env.js";
 import { createRedisConnection } from "../redis.js";
 import { utcDayStart, utcMonthStart } from "../sync/normalize.js";
-import { findTransferMatches, isTransferSignalCategory } from "../transfer/matching.js";
 import { triggerRollups } from "./rollups.js";
 
 const transactions = new TransactionRepository();
@@ -84,11 +86,28 @@ async function runTransferMatching(userId: string): Promise<TransferMatchingResu
   }
 
   const matchedIds = new Set<string>();
+  let appliedCount = 0;
   for (const pair of pairs) {
     // XFER-3: TransactionRepository.applyTransferMatch() was already
     // built and tested ahead of this story landing -- this job's only
     // addition is generating a fresh group id per pair and calling it.
-    await transactions.applyTransferMatch([pair.anchorId, pair.counterpartId], randomUUID());
+    // XFER-7 added the ownership pre-check (userId as the new first
+    // arg): candidates already came from findUnmatchedTransferCandidates
+    // (userId), so both ids always belong to this user here in practice
+    // -- applied should always be true -- but the check is defensive
+    // shared code, not something this call site gets to skip.
+    const applied = await transactions.applyTransferMatch(
+      userId,
+      [pair.anchorId, pair.counterpartId],
+      randomUUID(),
+    );
+    if (!applied) {
+      console.error(
+        `[transfer-matching] user=${userId} ownership check failed for pair ${pair.anchorId}/${pair.counterpartId}, skipped`,
+      );
+      continue;
+    }
+    appliedCount += 1;
     matchedIds.add(pair.anchorId);
     matchedIds.add(pair.counterpartId);
     const anchor = byId.get(pair.anchorId);
@@ -126,7 +145,7 @@ async function runTransferMatching(userId: string): Promise<TransferMatchingResu
 
   const result: TransferMatchingResult = {
     candidatesConsidered: candidates.length,
-    matched: pairs.length,
+    matched: appliedCount,
     agedToReview,
     touchedDayBuckets: [...dayBuckets.values()],
     touchedMonthBuckets: [...monthBuckets.values()],

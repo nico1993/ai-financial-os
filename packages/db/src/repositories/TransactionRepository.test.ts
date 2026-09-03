@@ -187,7 +187,12 @@ describe("TransactionRepository", () => {
     const a = await repo.upsertFromSync(baseInput({ providerTransactionId: "out", amount: -5000 }));
     const b = await repo.upsertFromSync(baseInput({ providerTransactionId: "in", amount: 5000 }));
 
-    await repo.applyTransferMatch([a._id.toString(), b._id.toString()], "group-1");
+    const applied = await repo.applyTransferMatch(
+      "user-1",
+      [a._id.toString(), b._id.toString()],
+      "group-1",
+    );
+    expect(applied).toBe(true);
 
     const results = await repo.findByUserAndDateRange("user-1", {
       start: new Date("2026-01-01"),
@@ -197,6 +202,49 @@ describe("TransactionRepository", () => {
       expect(txn.transferGroupId).toBe("group-1");
       expect(txn.excludeFromCashFlow).toBe(true);
     }
+  });
+
+  // XFER-7: applyTransferMatch's own ownership check -- the whole reason
+  // this method gained a userId parameter (BACKLOG.md's own note:
+  // "XFER-7 must validate the request by the user's session id comparing
+  // whether the tx id belongs to that customer").
+  it("applyTransferMatch refuses a pair where only one id belongs to the caller, and touches neither", async () => {
+    const mine = await repo.upsertFromSync(
+      baseInput({ userId: "user-1", providerTransactionId: "mine", amount: -5000 }),
+    );
+    const theirs = await repo.upsertFromSync(
+      baseInput({ userId: "user-2", providerTransactionId: "theirs", amount: 5000 }),
+    );
+
+    const applied = await repo.applyTransferMatch(
+      "user-1",
+      [mine._id.toString(), theirs._id.toString()],
+      "group-1",
+    );
+    expect(applied).toBe(false);
+
+    // Neither side got partially linked -- the exact failure mode this
+    // count-before-write check exists to prevent.
+    const mineAfter = await repo.findById(mine._id.toString());
+    const theirsAfter = await repo.findById(theirs._id.toString());
+    expect(mineAfter?.transferGroupId).toBeUndefined();
+    expect(theirsAfter?.transferGroupId).toBeUndefined();
+  });
+
+  it("applyTransferMatch refuses a wholly nonexistent id and touches nothing", async () => {
+    const mine = await repo.upsertFromSync(
+      baseInput({ userId: "user-1", providerTransactionId: "mine", amount: -5000 }),
+    );
+
+    const applied = await repo.applyTransferMatch(
+      "user-1",
+      [mine._id.toString(), new mongoose.Types.ObjectId().toString()],
+      "group-1",
+    );
+    expect(applied).toBe(false);
+
+    const mineAfter = await repo.findById(mine._id.toString());
+    expect(mineAfter?.transferGroupId).toBeUndefined();
   });
 
   it("upsertFromSync stores providerCategory and refreshes it on resync -- provider-owned, not app-owned like category", async () => {
@@ -216,7 +264,7 @@ describe("TransactionRepository", () => {
     await repo.upsertFromSync(baseInput({ providerTransactionId: "removed-one", isRemoved: true }));
     await repo.upsertFromSync(baseInput({ providerTransactionId: "pending-one", pending: true }));
     const grouped = await repo.upsertFromSync(baseInput({ providerTransactionId: "grouped-one" }));
-    await repo.applyTransferMatch([grouped._id.toString()], "group-existing");
+    await repo.applyTransferMatch("user-1", [grouped._id.toString()], "group-existing");
 
     const results = await repo.findUnmatchedTransferCandidates("user-1");
     expect(results.map((tx) => tx.providerTransactionId)).toEqual(["eligible"]);
@@ -397,7 +445,7 @@ describe("TransactionRepository", () => {
           amount: 5000,
         }),
       );
-      await repo.applyTransferMatch([matched._id.toString()], "group-1");
+      await repo.applyTransferMatch("user-1", [matched._id.toString()], "group-1");
 
       const rows = await repo.findForCashFlow("user-1", JAN);
       expect(rows).toEqual([]);
@@ -498,7 +546,7 @@ describe("TransactionRepository", () => {
           category: { tier: 1, value: "Transfer", status: "confirmed" },
         }),
       );
-      await repo.applyTransferMatch([matched._id.toString()], "group-1");
+      await repo.applyTransferMatch("user-1", [matched._id.toString()], "group-1");
 
       const distribution = await repo.getCategoryDistribution("user-1", JAN);
       expect(distribution).toEqual([]);

@@ -31,6 +31,12 @@ export interface TransactionListItem {
     officialName?: string;
     nickname?: string;
   };
+  /** XFER-7: mirrors the API's TransactionListItem -- true when this
+   * transaction's provider category carries a transfer/payment-type
+   * signal. TransferReviewControl.tsx uses this to decide whether a
+   * needs_review row gets the plain category-correction control or the
+   * "confirm external / link transfer" choice. */
+  isTransferCandidate: boolean;
 }
 
 export interface TransactionsPageResponse {
@@ -185,6 +191,68 @@ export function useUpdateTransactionMutation() {
       if (variables.category !== undefined) {
         void queryClient.invalidateQueries({ queryKey: ["analytics", "spending-categories"] });
       }
+    },
+  });
+}
+
+// -- XFER-7: the manual transfer-review UI --------------------------------
+//
+// Fed to TransferReviewControl.tsx/TransferLinkDialog.tsx for one
+// needs_review transaction whose isTransferCandidate flag (above) is set
+// -- the "link to another transaction" half of the choice; "confirm this
+// is a real external transaction" falls through to
+// useCorrectCategoryMutation above instead, CAT-7's existing path.
+
+export interface TransferCandidatesResponse {
+  items: TransactionListItem[];
+}
+
+/** Ranked suggestions for one transaction's transfer counterpart
+ * (routes/transactions.ts's GET .../transfer-candidates). `enabled` keeps
+ * this from firing until the person actually opens the picker for that
+ * row -- fetching candidates for every review-queue row up front, most of
+ * which nobody will ever open, would be pure waste. */
+export function useTransferCandidatesQuery(transactionId: string, options: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ["transactions", "transfer-candidates", transactionId],
+    queryFn: () =>
+      apiFetch<TransferCandidatesResponse>(
+        `/api/transactions/${transactionId}/transfer-candidates`,
+      ),
+    enabled: options.enabled,
+  });
+}
+
+export interface LinkTransferInput {
+  transactionId: string;
+  counterpartId: string;
+}
+
+export interface LinkTransferResult {
+  id: string;
+  transferGroupId: string;
+  category: {
+    value: string;
+    status: TransactionCategoryStatus;
+  };
+}
+
+/** Unlike useUpdateTransactionMutation's conditional analytics
+ * invalidation above, a successful link always changes both category and
+ * excludeFromCashFlow server-side (routes/transactions.ts's link-transfer
+ * route) -- there's no variant of success that didn't -- so this
+ * invalidates `["analytics", "spending-categories"]` unconditionally. */
+export function useLinkTransferMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ transactionId, counterpartId }: LinkTransferInput) =>
+      apiFetch<LinkTransferResult>(`/api/transactions/${transactionId}/link-transfer`, {
+        method: "POST",
+        body: { counterpartId },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      void queryClient.invalidateQueries({ queryKey: ["analytics", "spending-categories"] });
     },
   });
 }

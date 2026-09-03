@@ -32,6 +32,26 @@ const envSchema = z.object({
   // Optional: Plaid just won't fire webhooks without it, and ING-8's
   // polling fallback covers ingestion in the meantime (plaidClient.ts).
   PLAID_WEBHOOK_URL: z.string().url().optional(),
+
+  // --- Transfer matching (XFER-7, ARCHITECTURE.md §2.4, ADR-0006, ADR-0029) ---
+  // Mirrors apps/worker/src/env.ts's own copy of these two exactly
+  // (deliberately not shared -- see that file's own comment on why each
+  // app owns its config contract). routes/transactions.ts's suggest-
+  // candidates route runs the same suggestTransferCandidates() heuristic
+  // apps/worker's automated matching pass does, and a person reviewing
+  // suggestions should see the same tolerance window the automated pass
+  // itself uses, not a second, independently-tunable one that could
+  // silently drift out of sync. Only the two tolerance knobs are needed
+  // here -- XFER_MATCHING_CONCURRENCY and XFER_UNMATCHED_AGE_DAYS are
+  // worker-only job-scheduling concerns apps/api has no use for.
+  /** How many calendar days apart a suggested pair's dates may fall
+   * (§2.4: "ACH transfers commonly settle 1-3 days apart across
+   * accounts"). */
+  XFER_MATCH_DATE_TOLERANCE_DAYS: z.coerce.number().int().nonnegative().default(3),
+  /** How many cents a suggested pair's magnitudes may differ by, covering
+   * a wire/ACH fee shaved off one side (§2.4's "near-equal, to allow for
+   * a fee"). */
+  XFER_MATCH_AMOUNT_TOLERANCE_CENTS: z.coerce.number().int().nonnegative().default(100),
 });
 
 export type Env = z.infer<typeof envSchema>;

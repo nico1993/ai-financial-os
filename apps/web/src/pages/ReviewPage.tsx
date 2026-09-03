@@ -12,11 +12,18 @@
 // CAT-16: the "+ Add category" affordance (AddCategoryForm, CAT-14) that
 // used to live in this page's header has moved to the new
 // pages/CategoriesPage.tsx -- see that component's own comment for why.
+//
+// XFER-7: renderRowAction is now TransferReviewControl, not
+// ReviewCategoryControl directly -- it still delegates straight to
+// ReviewCategoryControl for every ordinary row (and for a transfer
+// candidate row once the person picks "confirm external"), but a row
+// whose isTransferCandidate flag is set gets an extra "link transfer"
+// choice first.
 import { useState } from "react";
 import { useTransactionsQuery } from "../api/transactions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { TransactionsTable } from "../components/TransactionsTable";
-import { ReviewCategoryControl } from "../components/ReviewCategoryControl";
+import { TransferReviewControl } from "../components/TransferReviewControl";
 import { Button } from "../components/ui/button";
 
 const PAGE_SIZE = 50;
@@ -56,7 +63,7 @@ export default function ReviewPage() {
             <>
               <TransactionsTable
                 items={query.data.items}
-                renderRowAction={(item) => <ReviewCategoryControl transaction={item} />}
+                renderRowAction={(item) => <TransferReviewControl transaction={item} />}
               />
               <div className="mt-4 flex items-center justify-between">
                 <span className="text-xs text-ink-muted">Page {page}</span>

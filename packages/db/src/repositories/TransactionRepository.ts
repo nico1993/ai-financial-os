@@ -280,12 +280,48 @@ export class TransactionRepository {
     }
   }
 
-  /** Links both sides of a matched transfer (ARCHITECTURE.md §2.4, XFER-3). */
-  async applyTransferMatch(transactionIds: string[], transferGroupId: string): Promise<void> {
+  /** Links both sides of a matched transfer (ARCHITECTURE.md §2.4, XFER-3),
+   * scoped to `userId` (XFER-7, user-confirmed 2026-09-02: "XFER-7 must
+   * validate the request by the user's session id comparing whether the
+   * tx id belongs to that customer"). This method's one caller before
+   * XFER-7 was the worker job (queues/transferMatching.ts), which only
+   * ever handed it ids drawn from findUnmatchedTransferCandidates(userId)
+   * -- already a user-scoped pool -- so the missing check was latent, not
+   * yet reachable by an untrusted caller. XFER-7 adds a route that lets a
+   * browser request a link between two ids it picked itself, which is
+   * exactly the case `updateCategoryForUser()`'s own "never trust a
+   * client-supplied id alone" precedent exists for.
+   *
+   * Counts how many of `transactionIds`, scoped to `userId`, actually
+   * exist *before* writing anything, and refuses (returns `false`, no
+   * write performed) unless every one of them does. Without this,
+   * `updateMany`'s `{_id: {$in: transactionIds}, userId}` filter would
+   * silently apply a partial match when only one of the ids actually
+   * belongs to the caller -- one transaction flagged as linked with no
+   * real counterpart, and the other left completely untouched with no
+   * error raised anywhere. Checked against `transactionIds.length`
+   * rather than a hardcoded 2 -- every call today passes exactly a pair,
+   * but the invariant this protects ("every id I was asked to link
+   * really belongs to this user") doesn't depend on the pair size, so
+   * there's no reason to bake that number in here. */
+  async applyTransferMatch(
+    userId: string,
+    transactionIds: string[],
+    transferGroupId: string,
+  ): Promise<boolean> {
+    const ownedCount = await TransactionModel.countDocuments({
+      _id: { $in: transactionIds },
+      userId,
+    });
+    if (ownedCount !== transactionIds.length) {
+      return false;
+    }
+
     await TransactionModel.updateMany(
-      { _id: { $in: transactionIds } },
+      { _id: { $in: transactionIds }, userId },
       { $set: { transferGroupId, excludeFromCashFlow: true } },
     );
+    return true;
   }
 
   /** The transfer-matching pass's full candidate pool for a user (§2.4,
