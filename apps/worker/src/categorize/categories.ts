@@ -72,6 +72,30 @@ export const DEFAULT_CATEGORY_SEEDS: readonly DefaultCategorySeed[] = [
   { name: "Transfer", color: "#2a78d6", icon: "arrow-left-right" },
   // See the file comment above -- deliberately not a categorical hue.
   { name: "Uncategorized", color: "#898781", icon: "circle-help" },
+  // CAT-18: four more kind: "income" categories, added alongside the
+  // existing "Income" rather than splitting or renaming it (Category.name
+  // is free text on Transaction.category.value -- renaming would silently
+  // orphan every transaction already tagged "Income" from the active
+  // category list). Appended after Uncategorized, not inserted earlier
+  // next to "Income" itself, specifically so the palette cycle above
+  // keeps every existing entry's color exactly as it was -- inserting
+  // these first would have pushed Transfer/Uncategorized to new array
+  // positions and, for Transfer, a new cycle color, which is a visible
+  // change nothing about this ticket asked for.
+  //
+  // CAT-17's gap: a negative-amount transaction (money in) that isn't a
+  // paycheck -- a refund, interest, a gift, anything else -- had nowhere
+  // to go but this same generic "Income" bucket. These give the
+  // categorization model, and CAT-12's future manual recategorize
+  // control, somewhere more specific to put it.
+  { name: "Reimbursement", color: "#1baf7a", icon: "rotate-ccw", kind: "income" },
+  { name: "Interest & Dividends", color: "#eda100", icon: "percent", kind: "income" },
+  // "gift" is already "Gifts & Donations"'s (expense-side) icon --
+  // reusing it here would make the two indistinguishable at a glance in
+  // exactly the place (an icon picker) where that distinction matters
+  // most, so this gets its own icon (CAT-19).
+  { name: "Gifts Received", color: "#e87ba4", icon: "party-popper", kind: "income" },
+  { name: "Other Income", color: "#008300", icon: "circle-plus", kind: "income" },
 ] as const;
 
 /** Name-only projection of the seed list -- test-categorization.ts (CAT-4/5's
