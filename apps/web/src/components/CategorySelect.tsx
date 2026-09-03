@@ -25,8 +25,13 @@
 // Both build their own `options` array and hand it to this component --
 // CategorySelect itself has no opinion on where an "All categories" or
 // "not currently listed" entry comes from, only on how to render
-// `{color swatch} {icon} {label}` consistently for whatever list it's
-// given.
+// `{icon, tinted by color} {label}` consistently for whatever list it's
+// given. CAT-20: this used to be a separate color-swatch dot plus a
+// fixed-gray icon -- now the icon itself carries the color (an inline
+// `style`, since a per-category hex value can't be a Tailwind class),
+// falling back to the same gray when there's no color to show (the
+// "not a real category" options -- "All categories", a not-currently-
+// listed raw value).
 import * as Select from "@radix-ui/react-select";
 import { Check, ChevronDown } from "lucide-react";
 import { CategoryIcon } from "../design/categoryIcons";
@@ -94,17 +99,11 @@ export function CategorySelect({
         )}
       >
         <span className="flex min-w-0 items-center gap-1.5 truncate">
-          {selected?.color && (
-            <span
-              aria-hidden="true"
-              className="h-2 w-2 flex-shrink-0 rounded-full"
-              style={{ backgroundColor: selected.color }}
-            />
-          )}
           {selected?.icon !== undefined && (
             <CategoryIcon
               icon={selected.icon}
               className="h-3.5 w-3.5 flex-shrink-0 text-ink-secondary"
+              style={selected.color ? { color: selected.color } : undefined}
             />
           )}
           <Select.Value placeholder={placeholder ?? "Select a category"}>
@@ -132,17 +131,11 @@ export function CategorySelect({
                   "data-[state=checked]:font-medium",
                 )}
               >
-                {option.color && (
-                  <span
-                    aria-hidden="true"
-                    className="h-2 w-2 flex-shrink-0 rounded-full"
-                    style={{ backgroundColor: option.color }}
-                  />
-                )}
                 {option.icon !== undefined && (
                   <CategoryIcon
                     icon={option.icon}
                     className="h-3.5 w-3.5 flex-shrink-0 text-ink-secondary"
+                    style={option.color ? { color: option.color } : undefined}
                   />
                 )}
                 <Select.ItemText>{option.label}</Select.ItemText>

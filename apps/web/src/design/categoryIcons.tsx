@@ -43,6 +43,7 @@ import {
   Wallet,
   type LucideIcon,
 } from "lucide-react";
+import type { CSSProperties } from "react";
 
 export interface CategoryIconOption {
   key: string;
@@ -96,11 +97,14 @@ const FALLBACK_ICON: LucideIcon = Tag;
 export interface CategoryIconProps {
   icon?: string;
   className?: string;
+  /** CAT-20: lets a caller tint the icon itself with the category's own
+   * color instead of a separate swatch dot next to a fixed-color icon. */
+  style?: CSSProperties;
 }
 
 /** Resolves a stored `Category.icon` string key to its actual
  * lucide-react component at render time (CAT-11's own ticket text). */
-export function CategoryIcon({ icon, className }: CategoryIconProps) {
+export function CategoryIcon({ icon, className, style }: CategoryIconProps) {
   const Icon = (icon && CATEGORY_ICON_COMPONENTS[icon]) || FALLBACK_ICON;
-  return <Icon className={className} aria-hidden="true" />;
+  return <Icon className={className} style={style} aria-hidden="true" />;
 }
