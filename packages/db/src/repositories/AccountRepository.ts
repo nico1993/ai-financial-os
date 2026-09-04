@@ -121,4 +121,15 @@ export class AccountRepository {
       throw err;
     }
   }
+
+  /** AUTH-8/ADR-0047: erases every Account this user owns -- the one
+   * hard delete this codebase makes for Account, reachable only from
+   * account deletion itself (never from ACCT-2's per-account "delete,"
+   * which stays a soft archive() on purpose). Returns the number of
+   * documents removed, matching the shape every other deleteAllForUser()
+   * added alongside this one uses. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await AccountModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }

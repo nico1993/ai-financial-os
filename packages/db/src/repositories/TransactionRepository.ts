@@ -648,4 +648,13 @@ export class TransactionRepository {
       date: doc.date,
     }));
   }
+
+  /** AUTH-8/ADR-0047: erases every Transaction this user owns -- by far
+   * the largest collection this touches, but the same unscoped
+   * deleteMany() as every other deleteAllForUser() here; no batching
+   * needed at this app's single-user scale. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await TransactionModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }

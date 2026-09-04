@@ -101,4 +101,24 @@ export class ConnectionRepository {
   async findSyncable(): Promise<ConnectionDocument[]> {
     return ConnectionModel.find({ status: "active" }).lean<ConnectionDocument[]>();
   }
+
+  /** AUTH-8: every Connection this user has, *with* its access token --
+   * account deletion needs to revoke each one at Plaid
+   * (FinancialProvider.removeItem()) before erasing our own record of
+   * it, the one other caller besides the provider-sync job (ING-4) that
+   * legitimately needs this field. */
+  async findByUserIdWithAccessToken(userId: string): Promise<ConnectionDocument[]> {
+    return ConnectionModel.find({ userId }).select("+accessToken").lean<ConnectionDocument[]>();
+  }
+
+  /** AUTH-8/ADR-0047: erases every Connection this user owns. Plaid-side
+   * revocation (FinancialProvider.removeItem(), via
+   * findByUserIdWithAccessToken() above) happens first, in the caller
+   * (routes/auth.ts) -- this method only ever touches this app's own
+   * records, the same division every other deleteAllForUser() added
+   * alongside this one keeps. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await ConnectionModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }

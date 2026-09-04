@@ -105,4 +105,16 @@ export class RollupRepository {
       .sort({ month: 1 })
       .lean<MonthlyRollupDocument[]>();
   }
+
+  /** AUTH-8/ADR-0047: erases every DailyBalanceSnapshot and
+   * MonthlyRollup this user owns -- the one deleteAllForUser() here that
+   * has to touch two collections, since this repository already wraps
+   * both (its own file header comment). Returns their combined count. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const [daily, monthly] = await Promise.all([
+      DailyBalanceSnapshotModel.deleteMany({ userId }),
+      MonthlyRollupModel.deleteMany({ userId }),
+    ]);
+    return daily.deletedCount + monthly.deletedCount;
+  }
 }

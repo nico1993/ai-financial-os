@@ -1,9 +1,20 @@
 // routes/auth.ts — register/login/logout/me (ADR-0018, AUTH-3).
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { UserRepository } from "@financial-os/db";
+import {
+  AccountRepository,
+  CategoryRepository,
+  ConnectionRepository,
+  MerchantRuleRepository,
+  RawPayloadRepository,
+  RollupRepository,
+  SubscriptionRepository,
+  TransactionRepository,
+  UserRepository,
+} from "@financial-os/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import { requireAuth } from "../auth/requireAuth.js";
+import { getFinancialProvider } from "../provider.js";
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -27,7 +38,26 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8, "password must be at least 8 characters"),
 });
 
+// AUTH-8: password-confirmed, the same "re-ask for the credential
+// before a consequential account action" posture changePasswordSchema
+// already established -- more so here, since this one is irreversible.
+const deleteAccountSchema = z.object({
+  password: z.string().min(1),
+});
+
 const userRepo = new UserRepository();
+// AUTH-8: one instance of every repository that owns user-scoped data --
+// the account-deletion route below is the only user of most of these in
+// this file, mirroring how every other route file in this app
+// instantiates the repositories its own routes need at module scope.
+const accountRepo = new AccountRepository();
+const categoryRepo = new CategoryRepository();
+const connectionRepo = new ConnectionRepository();
+const merchantRuleRepo = new MerchantRuleRepository();
+const rawPayloadRepo = new RawPayloadRepository();
+const rollupRepo = new RollupRepository();
+const subscriptionRepo = new SubscriptionRepository();
+const transactionRepo = new TransactionRepository();
 
 /** Resolves req.session.destroy() to a Promise regardless of whether the
  * installed @fastify/session version also returns one -- it always
@@ -197,5 +227,65 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const newPasswordHash = await hashPassword(parsed.data.newPassword);
     await userRepo.updatePassword(userId, newPasswordHash);
     return reply.code(204).send();
+  });
+
+  // AUTH-8/ADR-0047: irreversibly erases this user's entire account --
+  // see ADR-0047 for the full reasoning on why this is this codebase's
+  // one deliberate hard-delete. Order: verify the password fully before
+  // touching anything -- fail closed; best-effort revoke every linked
+  // Connection at Plaid (a revoke failure is logged, not fatal, the
+  // same "log, don't fail the response" posture ING-13's sync trigger
+  // already established for a non-critical side effect); cascade-delete
+  // every collection this user owns; delete the User document itself;
+  // destroy the current session. Not wrapped in a Mongo transaction --
+  // this codebase has never used one anywhere else either (no replica-
+  // set requirement has come up before), so a mid-cascade failure here
+  // is a real, accepted gap (a 500 with some collections already
+  // erased and others not), flagged in ADR-0047 rather than silently
+  // assumed atomic.
+  app.delete("/api/auth/me", { preHandler: requireAuth }, async (req, reply) => {
+    const userId = req.session.userId as string;
+    const parsed = deleteAccountSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid input" });
+    }
+
+    const user = await userRepo.findByIdWithPassword(userId);
+    const valid = user ? await verifyPassword(parsed.data.password, user.passwordHash) : false;
+    if (!user || !valid) {
+      return reply.code(401).send({ error: "password is incorrect" });
+    }
+
+    const connections = await connectionRepo.findByUserIdWithAccessToken(userId);
+    await Promise.all(
+      connections.map(async (connection) => {
+        try {
+          await getFinancialProvider().removeItem({
+            providerItemId: connection.providerItemId,
+            accessToken: connection.accessToken,
+          });
+        } catch (err) {
+          req.log.error(
+            { err, connectionId: connection._id.toString() },
+            "[auth] failed to revoke a Plaid item during account deletion -- continuing anyway",
+          );
+        }
+      }),
+    );
+
+    await Promise.all([
+      accountRepo.deleteAllForUser(userId),
+      categoryRepo.deleteAllForUser(userId),
+      connectionRepo.deleteAllForUser(userId),
+      merchantRuleRepo.deleteAllForUser(userId),
+      rawPayloadRepo.deleteAllForUser(userId),
+      rollupRepo.deleteAllForUser(userId),
+      subscriptionRepo.deleteAllForUser(userId),
+      transactionRepo.deleteAllForUser(userId),
+    ]);
+
+    await userRepo.deleteById(userId);
+    await destroySession(req);
+    return reply.send({ deleted: true });
   });
 }

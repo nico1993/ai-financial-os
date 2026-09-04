@@ -148,4 +148,12 @@ export class CategoryRepository {
       throw err;
     }
   }
+
+  /** AUTH-8/ADR-0047: erases every Category this user owns (both
+   * seeded defaults and custom ones -- provenance doesn't matter here,
+   * everything belonging to this user goes). */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await CategoryModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }

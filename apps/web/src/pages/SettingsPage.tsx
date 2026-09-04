@@ -1,19 +1,21 @@
-// pages/SettingsPage.tsx — AUTH-7: lets the signed-in user edit their own
-// profile (email, first/last name) and change their password. AUTH-8
-// extends this same page with a "Danger zone" section (delete account)
-// rather than a second page, since both are the same "manage my own
-// account" destination reached from one place (AppShell's new settings
-// link, next to Sign out).
+// pages/SettingsPage.tsx — AUTH-7/AUTH-8: lets the signed-in user edit
+// their own profile (email, first/last name), change their password,
+// and permanently delete their account -- one page, since all three are
+// the same "manage my own account" destination reached from one place
+// (AppShell's new settings link, next to Sign out).
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { getApiErrorMessage } from "../api/client";
 import {
   useChangePasswordMutation,
+  useDeleteMyAccountMutation,
   useSessionQuery,
   useUpdateProfileMutation,
 } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { DialogContent, DialogDescription, DialogRoot, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 
 /** The Profile card: email, first name, last name. Prefilled once
@@ -204,6 +206,100 @@ function PasswordCard() {
   );
 }
 
+/** AUTH-8: irreversible, password-confirmed via a dialog -- the same
+ * "ask again before something consequential" instinct
+ * DeleteAccountButton.tsx (ACCT-2) already established for the much
+ * lower-stakes "unlink one bank account" action, a plain confirm click
+ * there since that one's a reversible archive. This one asks for a
+ * password instead, since it's permanent (ADR-0047). Redirects to
+ * /login on success -- the session is already destroyed server-side by
+ * that point (routes/auth.ts's DELETE /api/auth/me), and
+ * useDeleteMyAccountMutation() has already cleared every cached query,
+ * so there's nothing left in this app for the user to land back on. */
+function DangerZoneCard() {
+  const navigate = useNavigate();
+  const deleteAccount = useDeleteMyAccountMutation();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+
+  return (
+    <Card className="border-critical-text/30">
+      <CardHeader>
+        <CardTitle>Danger zone</CardTitle>
+        <CardDescription>Permanently delete your account and everything in it.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-xs text-ink-secondary">
+          This revokes every linked bank connection at the provider (not just unlinking it here),
+          then erases every transaction, category, and everything else tied to your account. There
+          is no undo.
+        </p>
+        <DialogRoot
+          open={open}
+          onOpenChange={(next: boolean) => {
+            setOpen(next);
+            if (!next) {
+              setPassword("");
+              deleteAccount.reset();
+            }
+          }}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOpen(true)}
+            className="border-critical-text/40 text-critical-text hover:bg-critical-text/10"
+          >
+            Delete my account
+          </Button>
+          {open && (
+            <DialogContent>
+              <DialogTitle>Delete your account?</DialogTitle>
+              <DialogDescription className="mb-3">
+                This cannot be undone. Enter your password to confirm.
+              </DialogDescription>
+              <div className="mb-3 flex flex-col gap-1.5">
+                <label htmlFor="delete-password" className="text-xs font-medium text-ink">
+                  Password
+                </label>
+                <Input
+                  id="delete-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </div>
+              {deleteAccount.isError && (
+                <p role="alert" className="mb-3 text-xs text-critical-text">
+                  {getApiErrorMessage(deleteAccount.error, "Could not delete your account.")}
+                </p>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={deleteAccount.isPending || password.length === 0}
+                  onClick={() =>
+                    deleteAccount.mutate(
+                      { password },
+                      { onSuccess: () => navigate("/login", { replace: true }) },
+                    )
+                  }
+                >
+                  {deleteAccount.isPending ? "Deleting…" : "Delete my account"}
+                </Button>
+              </div>
+            </DialogContent>
+          )}
+        </DialogRoot>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 p-6">
@@ -215,6 +311,7 @@ export default function SettingsPage() {
       <div className="flex max-w-md flex-col gap-4">
         <ProfileCard />
         <PasswordCard />
+        <DangerZoneCard />
       </div>
     </div>
   );

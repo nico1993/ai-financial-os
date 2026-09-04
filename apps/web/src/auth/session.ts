@@ -125,3 +125,30 @@ export function useChangePasswordMutation() {
       apiFetch<void>("/api/auth/me/password", { method: "POST", body: input }),
   });
 }
+
+// -- AUTH-8: Settings page's Danger Zone -------------------------------------
+
+export interface DeleteMyAccountInput {
+  password: string;
+}
+
+/** Deliberately NOT named useDeleteAccountMutation() -- apps/web/src/
+ * api/accounts.ts already exports that exact name for ACCT-2's very
+ * different "unlink one bank Account" action. Naming this one
+ * useDeleteMyAccountMutation() keeps the two unmistakably distinct
+ * wherever both might be imported in the same file (SettingsPage.tsx
+ * doesn't today, but the naming collision risk is worth avoiding on
+ * its own). `queryClient.clear()`, not a targeted invalidation --
+ * once this succeeds, literally every cached query in this app
+ * (transactions, accounts, categories, analytics, all of it)
+ * describes data that no longer exists. */
+export function useDeleteMyAccountMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DeleteMyAccountInput) =>
+      apiFetch<{ deleted: true }>("/api/auth/me", { method: "DELETE", body: input }),
+    onSuccess: () => {
+      queryClient.clear();
+    },
+  });
+}

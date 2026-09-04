@@ -59,9 +59,7 @@ export class UserRepository {
    * codebase, rather than letting it escape as a 500. */
   async findByIdWithPassword(userId: string): Promise<UserDocument | null> {
     try {
-      return await UserModel.findById(userId)
-        .select("+passwordHash")
-        .lean<UserDocument | null>();
+      return await UserModel.findById(userId).select("+passwordHash").lean<UserDocument | null>();
     } catch (err) {
       if (err instanceof Error && err.name === "CastError") {
         return null;
@@ -148,5 +146,23 @@ export class UserRepository {
   async findAllIds(): Promise<string[]> {
     const docs = await UserModel.find().select("_id").lean<{ _id: unknown }[]>();
     return docs.map((doc) => String(doc._id));
+  }
+
+  /** AUTH-8/ADR-0047: the one hard delete in this codebase -- see that
+   * ADR for why deleting a User is deliberately not a soft-archive the
+   * way every other delete here is (Transaction.isRemoved,
+   * Category.archived, Account.archived). Returns whether a matching
+   * user was found and removed; tolerates a malformed id the same way
+   * every other id-scoped method in this repository already does. */
+  async deleteById(userId: string): Promise<boolean> {
+    try {
+      const result = await UserModel.deleteOne({ _id: userId });
+      return result.deletedCount > 0;
+    } catch (err) {
+      if (err instanceof Error && err.name === "CastError") {
+        return false;
+      }
+      throw err;
+    }
   }
 }

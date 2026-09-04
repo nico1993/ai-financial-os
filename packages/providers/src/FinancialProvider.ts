@@ -127,6 +127,18 @@ export interface FinancialProvider {
     cursor: string | null,
   ): Promise<SyncTransactionsResult>;
   getAccounts(connection: ProviderConnectionRef): Promise<NormalizedAccount[]>;
+  /** AUTH-8/ADR-0047: revokes a Connection's provider access entirely --
+   * distinct from ACCT-2's per-Account archive(), which deliberately
+   * never touches the provider (that ticket's own text: unlinking one
+   * Account under a login with several shouldn't risk breaking sync for
+   * its siblings). Only ever called when the whole User account is
+   * being deleted -- every Connection goes at once, so there's no
+   * "which Account did they mean" ambiguity ACCT-2 flagged as the
+   * reason it didn't build this itself. Idempotent from the caller's
+   * perspective: an already-revoked or already-gone Item should not be
+   * treated as a fatal error by anything calling this (see
+   * routes/auth.ts's own best-effort handling). */
+  removeItem(connection: ProviderConnectionRef): Promise<void>;
   /** Verifies a webhook actually came from the provider before its payload
    * is trusted (ARCHITECTURE.md §5 — the webhook endpoint is
    * internet-reachable). */

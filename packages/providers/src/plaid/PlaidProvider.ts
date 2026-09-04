@@ -159,6 +159,24 @@ export class PlaidProvider implements FinancialProvider {
     });
   }
 
+  /** AUTH-8/ADR-0047: calls Plaid's `/item/remove` -- confirmed against
+   * the installed `plaid@30.1.0`'s own type declarations (ItemRemoveRequest
+   * takes just `access_token`; client_id/secret are already baked into
+   * every call via `plaidClient.ts`'s Configuration), the same
+   * registry-check discipline every Plaid-adjacent addition in this
+   * codebase already follows. Not wrapped in any extra idempotency
+   * handling here -- `withPlaidErrorMapping()` already normalizes
+   * whatever Plaid returns for an already-removed Item into this
+   * package's own error taxonomy (ADR-0023); it's the caller's job to
+   * decide an ITEM_NOT_FOUND-shaped failure here isn't fatal to the
+   * larger operation it's part of (routes/auth.ts's account-deletion
+   * route treats every call to this method as best-effort). */
+  async removeItem(connection: ProviderConnectionRef): Promise<void> {
+    return withPlaidErrorMapping(async () => {
+      await this.client.itemRemove({ access_token: connection.accessToken });
+    });
+  }
+
   /** Verifies Plaid's webhook JWT (ARCHITECTURE.md §5): decode the
    * `Plaid-Verification` header's JWT to find its key id, fetch (and cache)
    * that key from Plaid, verify the ES256 signature, reject stale tokens

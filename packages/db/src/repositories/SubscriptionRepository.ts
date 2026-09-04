@@ -70,4 +70,13 @@ export class SubscriptionRepository {
       { $set: { active: false } },
     );
   }
+
+  /** AUTH-8/ADR-0047: erases every detected Subscription this user
+   * owns, active or lapsed -- unlike markInactive() (ANLY-7's nightly
+   * job, a real lapse worth keeping history of), account deletion means
+   * none of it should remain. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await SubscriptionModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }

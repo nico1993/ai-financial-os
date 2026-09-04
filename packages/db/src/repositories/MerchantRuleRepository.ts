@@ -63,4 +63,11 @@ export class MerchantRuleRepository {
       { upsert: true, setDefaultsOnInsert: true },
     );
   }
+
+  /** AUTH-8/ADR-0047: erases every MerchantRule (Tier 1 and Tier 2) this
+   * user owns. */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await MerchantRuleModel.deleteMany({ userId });
+    return result.deletedCount;
+  }
 }
