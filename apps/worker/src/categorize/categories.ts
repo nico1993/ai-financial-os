@@ -67,7 +67,19 @@ export const DEFAULT_CATEGORY_SEEDS: readonly DefaultCategorySeed[] = [
   { name: "Education", color: "#eda100", icon: "graduation-cap" },
   { name: "Personal Care", color: "#e87ba4", icon: "sparkles" },
   { name: "Gifts & Donations", color: "#008300", icon: "gift" },
-  { name: "Fees & Charges", color: "#4a3aa7", icon: "banknote" },
+  // CAT-21: re-pointed from "banknote" to "trending-down" -- a fresh, independent
+  // audit of all 22 category/icon pairings (the third: CAT-11 built this list, CAT-19
+  // re-reviewed it) found one genuine improvement here and confirmed the rest.
+  // "Banknote" (a cash/bill glyph) read closer to generic money or "Income" than to
+  // specifically a fee being charged; "trending-down" mirrors "Income"'s own
+  // "trending-up" (below) -- money trending up is income, money trending down is a
+  // fee/charge -- which reads clearly at a glance in a way "banknote" didn't. The old
+  // "banknote" icon key stays in apps/web/src/design/categoryIcons.tsx's picker
+  // (relabeled "Cash") for a custom category that wants it -- nothing else in this
+  // seed list changes; every other pairing was deliberately kept as-is after the same
+  // scrutiny (see that file's own updated header comment for specifics on the ones
+  // that came closest to a swap and why they stayed).
+  { name: "Fees & Charges", color: "#4a3aa7", icon: "trending-down" },
   { name: "Income", color: "#e34948", icon: "trending-up", kind: "income" },
   { name: "Transfer", color: "#2a78d6", icon: "arrow-left-right" },
   // See the file comment above -- deliberately not a categorical hue.

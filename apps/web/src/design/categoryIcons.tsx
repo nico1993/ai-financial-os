@@ -8,7 +8,7 @@
 // published version (its `dynamicIconImports`/named-export manifests),
 // not assumed from general familiarity with the library.
 //
-// 28 icons total: one per DEFAULT_CATEGORY_SEED
+// 29 icons total (CAT-21 added a 29th, see below): one per DEFAULT_CATEGORY_SEED
 // (apps/worker/src/categorize/categories.ts -- duplicated key-for-key, the
 // same cross-app small-constant-list duplication CATEGORICAL_PALETTE
 // already established between that file and tokens.ts, since apps/web
@@ -22,6 +22,20 @@
 // registry-check discipline). The original 18 were re-reviewed at the
 // same time and left as they were -- nothing forced or generic-feeling
 // stood out worth changing.
+//
+// CAT-21 (2026-09-04) did a third, independent, category-by-category pass -- this time
+// prompted by the user wanting to confirm the icons genuinely come from the database
+// (they do: seeded per-category by CategoryRepository.seedDefaults() from this exact
+// list, stored on Category.icon, resolved back to a component by CategoryIcon() below
+// at render time -- nothing hardcoded in between). Found one real improvement (Fees &
+// Charges: banknote -> trending-down, see categorize/categories.ts) and specifically
+// re-scrutinized the closest calls -- Transportation's "car" (no bus/transit glyph
+// exists in this curated set, and "car" is the same convention most budgeting apps
+// use for this exact category), Bills & Utilities' "receipt" (a utility-specific bolt/
+// plug icon would under-represent the "Bills" half -- phone, water, internet -- of a
+// combined category), and Personal Care's "sparkles" (a common, recognizable beauty/
+// self-care convention already) -- and kept all three as they were, on purpose, not by
+// default. 29 icons total now, not 28 (see below).
 import {
   ArrowLeftRight,
   Banknote,
@@ -48,6 +62,7 @@ import {
   ShoppingCart,
   Sparkles,
   Tag,
+  TrendingDown,
   TrendingUp,
   Utensils,
   Wallet,
@@ -82,8 +97,13 @@ export const CATEGORY_ICON_OPTIONS: readonly CategoryIconOption[] = [
   { key: "graduation-cap", label: "Education", Icon: GraduationCap },
   { key: "sparkles", label: "Personal care", Icon: Sparkles },
   { key: "gift", label: "Gifts", Icon: Gift },
-  { key: "banknote", label: "Fees", Icon: Banknote },
+  // CAT-21: relabeled "Fees" -> "Cash" -- no longer Fees & Charges' assigned icon
+  // (see "trending-down" below), still here as a general-purpose picker option.
+  { key: "banknote", label: "Cash", Icon: Banknote },
   { key: "trending-up", label: "Income", Icon: TrendingUp },
+  // CAT-21: Fees & Charges' new icon (was "banknote") -- mirrors "trending-up"
+  // above on purpose, see categorize/categories.ts's own comment on this swap.
+  { key: "trending-down", label: "Fees & Charges", Icon: TrendingDown },
   { key: "arrow-left-right", label: "Transfer", Icon: ArrowLeftRight },
   { key: "circle-help", label: "Uncategorized", Icon: CircleHelp },
   { key: "tag", label: "Tag", Icon: Tag },
