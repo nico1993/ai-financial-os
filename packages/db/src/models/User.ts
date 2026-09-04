@@ -12,6 +12,15 @@ export interface UserDocument {
    * excluded from every query by default, same pattern as
    * Connection.accessToken (ADR-0016). */
   passwordHash: string;
+  /** AUTH-7: optional -- every user created before this field existed has
+   * neither stored at all, the same "optional at the type level despite
+   * being a normal, freely-editable field" honesty this codebase already
+   * applies to Account.nickname/Category.icon. Only the Settings page's
+   * Profile form (`UserRepository.updateProfile()`) ever writes these --
+   * no sync/seed path sets them the way a provider owns other fields
+   * elsewhere in this schema set. */
+  firstName?: string;
+  lastName?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -20,6 +29,8 @@ const userSchema = new Schema<UserDocument>(
   {
     email: { type: String, required: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true, select: false },
+    firstName: { type: String, trim: true },
+    lastName: { type: String, trim: true },
   },
   { timestamps: true },
 );

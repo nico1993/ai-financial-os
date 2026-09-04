@@ -8,6 +8,7 @@ import OverviewPage from "./pages/OverviewPage";
 import SubscriptionsPage from "./pages/SubscriptionsPage";
 import ReviewPage from "./pages/ReviewPage";
 import CategoriesPage from "./pages/CategoriesPage";
+import SettingsPage from "./pages/SettingsPage";
 
 // WEB-2's route table -- every page BACKLOG.md names for this epic:
 // login (AUTH-5), net worth, cash flow, spending categories,
@@ -51,6 +52,12 @@ export const router = createBrowserRouter([
           // relocated off ReviewPage.tsx (see CategoriesPage.tsx's own
           // comment).
           { path: "categories", element: <CategoriesPage /> },
+          // AUTH-7: reached from AppShell's new settings link next to
+          // Sign out, not from the main NAV_ITEMS list -- a settings
+          // page is not a daily-use destination competing with the ones
+          // that already have nav items (CAT-16's own /categories
+          // placement made the same call for the same reason).
+          { path: "settings", element: <SettingsPage /> },
           { path: "*", element: <Navigate to="/overview" replace /> },
         ],
       },

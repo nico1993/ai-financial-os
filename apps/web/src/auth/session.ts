@@ -4,6 +4,12 @@ import { apiFetch } from "../api/client";
 export interface AuthUser {
   id: string;
   email: string;
+  /** AUTH-7: `null` when never set, not `undefined` -- routes/auth.ts's
+   * responses always include both keys explicitly (`?? null`), so a
+   * component can read `user.firstName ?? ""` with no extra undefined
+   * check. */
+  firstName: string | null;
+  lastName: string | null;
 }
 
 export const AUTH_ME_QUERY_KEY = ["auth", "me"] as const;
@@ -76,5 +82,46 @@ export function useLogoutMutation() {
     onSuccess: () => {
       queryClient.setQueryData(AUTH_ME_QUERY_KEY, null);
     },
+  });
+}
+
+// -- AUTH-7: Settings page's Profile card ------------------------------------
+
+export interface UpdateProfileInput {
+  email?: string;
+  /** Empty string clears the field -- mirrors routes/auth.ts's own
+   * clear-via-empty-string contract for these two fields
+   * (updateProfileSchema's doc comment). */
+  firstName?: string;
+  lastName?: string;
+}
+
+/** Same setQueryData-not-invalidateQueries shortcut useLoginMutation()
+ * already uses above -- PATCH /api/auth/me's response is the
+ * authoritative, up-to-date AuthUser shape, so there's nothing a
+ * refetch would learn that the response doesn't already say. */
+export function useUpdateProfileMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateProfileInput) =>
+      apiFetch<AuthUser>("/api/auth/me", { method: "PATCH", body: input }),
+    onSuccess: (user) => {
+      queryClient.setQueryData(AUTH_ME_QUERY_KEY, user);
+    },
+  });
+}
+
+export interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** No query invalidation -- POST /api/auth/me/password's 204 response
+ * carries nothing AuthUser-shaped to write back, and a password change
+ * doesn't touch any other cached state in this app. */
+export function useChangePasswordMutation() {
+  return useMutation({
+    mutationFn: (input: ChangePasswordInput) =>
+      apiFetch<void>("/api/auth/me/password", { method: "POST", body: input }),
   });
 }

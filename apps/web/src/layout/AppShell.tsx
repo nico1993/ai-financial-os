@@ -1,5 +1,5 @@
 import type { ReactNode, SVGProps } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { useLogoutMutation, useSessionQuery } from "../auth/session";
 import { useConfigQuery } from "../api/config";
 import { Button } from "../components/ui/button";
@@ -74,6 +74,26 @@ function IconTag(props: SVGProps<SVGSVGElement>) {
         strokeLinejoin="round"
       />
       <circle cx="8.25" cy="8.25" r="1.25" fill="currentColor" />
+    </svg>
+  );
+}
+
+// AUTH-7: the settings link next to Sign out below -- a "sliders" glyph
+// rather than a literal gear, matching this file's own preference for
+// simple 1-2 element hand-drawn shapes (IconTag's path + circle is the
+// closest precedent) over a more detailed icon.
+function IconSettings(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M4 6h9M17 6h3M4 12h3M9 12h11M4 18h13M19 18h1"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <circle cx="13" cy="6" r="2" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="12" r="2" fill="currentColor" stroke="none" />
+      <circle cx="17" cy="18" r="2" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -172,6 +192,17 @@ export function AppShell() {
             <div className="truncate text-xs font-medium">{user?.email}</div>
             <div className="text-[11px] text-ink-muted">Owner · single-user</div>
           </div>
+          {/* AUTH-7: /settings isn't one of NAV_ITEMS above (same
+           * "not a daily-use destination" reasoning CAT-16 already
+           * applied to /categories) -- it lives here instead, next to
+           * Sign out, since both are "about this account" actions. Uses
+           * Button's `asChild` (WEB-5/ADR-0044) to get a real <a> under
+           * the hood rather than a button that navigates via onClick. */}
+          <Button variant="ghost" size="sm" aria-label="Settings" className="px-2" asChild>
+            <Link to="/settings">
+              <IconSettings width={14} height={14} />
+            </Link>
+          </Button>
           <Button
             variant="ghost"
             size="sm"
