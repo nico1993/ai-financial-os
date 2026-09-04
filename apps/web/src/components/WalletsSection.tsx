@@ -5,12 +5,14 @@
 // delete), reshaped from a `<ul>` list into a card grid per the ticket's
 // own "Wallets section -- one card per linked Account" text, plus one new
 // behavior: clicking a card navigates to `/transactions` filtered to that
-// account (`?account=<id>`). That query param doesn't do anything yet --
-// WEB-13 is what teaches TransactionsPage.tsx to read it -- so this link
-// is inert (lands on the unfiltered ledger) until WEB-13 ships. Flagged
-// as a known, accepted sequencing gap rather than a bug: building the
-// link now (rather than leaving the card unclickable until WEB-13 lands)
-// means this section doesn't need a second pass once it does.
+// account (`?account=<id>`) -- WEB-13 (shipped 2026-09-03) taught
+// TransactionsPage.tsx to read that param, so this is live now, not the
+// placeholder it was when this file was first written.
+//
+// ING-14 (2026-09-04) adds a second new behavior: "Connect a bank" now
+// opens a small dialog asking how far back to backfill (1/2/3 months)
+// before starting Plaid Link, instead of jumping straight into Link
+// with a hardcoded window.
 import { useEffect, useState } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { Link } from "react-router-dom";
@@ -27,6 +29,7 @@ import { accountDisplayName } from "../lib/accountDisplayName";
 import { DeleteAccountButton } from "./DeleteAccountButton";
 import { formatCents } from "../lib/money";
 import { Button } from "./ui/button";
+import { DialogContent, DialogDescription, DialogRoot, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 
 const CONNECTION_STATUS_LABEL: Record<string, string> = {
@@ -179,6 +182,12 @@ export function WalletsSection() {
   const exchangeToken = useExchangePublicTokenMutation();
   const triggerSync = useTriggerSyncMutation();
   const [linkToken, setLinkToken] = useState<string | null>(null);
+  // ING-14: gates the backfill-window dialog opened by the "Connect a
+  // bank" button below -- Plaid Link itself only opens once this closes
+  // successfully and a link token comes back (the existing linkToken/
+  // ready effect above, unchanged).
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const [daysRequested, setDaysRequested] = useState(30);
 
   // Unchanged from AccountsPage.tsx -- see that file's own retired
   // comment for why `open()` is called from the effect rather than
@@ -200,10 +209,19 @@ export function WalletsSection() {
     }
   }, [linkToken, ready, open]);
 
+  // ING-14: `daysRequested` is whatever the dialog's dropdown currently
+  // holds when this runs -- read at call time, not baked into the
+  // dialog's own onClick, so the state stays the single source of truth.
   function handleConnect(): void {
-    createLinkToken.mutate(undefined, {
-      onSuccess: ({ linkToken: token }) => setLinkToken(token),
-    });
+    createLinkToken.mutate(
+      { daysRequested },
+      {
+        onSuccess: ({ linkToken: token }) => {
+          setLinkToken(token);
+          setConnectDialogOpen(false);
+        },
+      },
+    );
   }
 
   return (
@@ -213,16 +231,59 @@ export function WalletsSection() {
           <h2 className="text-base font-medium tracking-tight text-ink">Wallets</h2>
           <p className="text-sm text-ink-secondary">Linked bank and credit accounts.</p>
         </div>
-        <Button onClick={handleConnect} disabled={createLinkToken.isPending}>
-          {createLinkToken.isPending ? "Preparing…" : "Connect a bank"}
-        </Button>
+        <DialogRoot
+          open={connectDialogOpen}
+          onOpenChange={(next: boolean) => {
+            setConnectDialogOpen(next);
+            if (!next) createLinkToken.reset();
+          }}
+        >
+          <Button onClick={() => setConnectDialogOpen(true)} disabled={createLinkToken.isPending}>
+            {createLinkToken.isPending ? "Preparing…" : "Connect a bank"}
+          </Button>
+          {connectDialogOpen && (
+            <DialogContent>
+              <DialogTitle>How far back should we look?</DialogTitle>
+              <DialogDescription className="mb-3">
+                We&apos;ll pull this much transaction history once the connection finishes. 3
+                months is the most we ever request.
+              </DialogDescription>
+              <div className="mb-3 flex flex-col gap-1.5">
+                <label htmlFor="days-requested" className="text-xs font-medium text-ink">
+                  Transaction history
+                </label>
+                <select
+                  id="days-requested"
+                  value={daysRequested}
+                  onChange={(event) => setDaysRequested(Number(event.target.value))}
+                  className="h-9 rounded-md border border-border bg-surface px-2.5 text-sm text-ink"
+                >
+                  <option value={30}>1 month</option>
+                  <option value={60}>2 months</option>
+                  <option value={90}>3 months</option>
+                </select>
+              </div>
+              {createLinkToken.isError && (
+                <p role="alert" className="mb-3 text-xs text-critical-text">
+                  {getApiErrorMessage(
+                    createLinkToken.error,
+                    "Could not start Plaid Link. Try again.",
+                  )}
+                </p>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setConnectDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button size="sm" disabled={createLinkToken.isPending} onClick={handleConnect}>
+                  {createLinkToken.isPending ? "Preparing…" : "Continue"}
+                </Button>
+              </div>
+            </DialogContent>
+          )}
+        </DialogRoot>
       </div>
 
-      {createLinkToken.isError && (
-        <p role="alert" className="text-xs text-critical-text">
-          {getApiErrorMessage(createLinkToken.error, "Could not start Plaid Link. Try again.")}
-        </p>
-      )}
       {exchangeToken.isError && (
         <p role="alert" className="text-xs text-critical-text">
           {getApiErrorMessage(

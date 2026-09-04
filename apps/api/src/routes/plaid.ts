@@ -24,13 +24,30 @@ const exchangeSchema = z.object({
   publicToken: z.string().min(1),
 });
 
+// ING-14: 1/2/3 months, matching WalletsSection.tsx's own dropdown
+// (30/60/90) -- PlaidProvider clamps to this same range again
+// regardless, so this schema is about giving a caller a real 400
+// instead of a silently-clamped surprise, not the only enforcement.
+const linkTokenSchema = z
+  .object({
+    daysRequested: z.number().int().min(30).max(90).optional(),
+  })
+  .optional();
+
 const connectionRepo = new ConnectionRepository();
 const accountRepo = new AccountRepository();
 
 export async function registerPlaidRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/plaid/link-token", { preHandler: requireAuth }, async (req, reply) => {
     const userId = req.session.userId as string;
-    const { linkToken } = await getFinancialProvider().createLinkToken({ userId });
+    const parsed = linkTokenSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid input" });
+    }
+    const { linkToken } = await getFinancialProvider().createLinkToken({
+      userId,
+      daysRequested: parsed.data?.daysRequested,
+    });
     return reply.send({ linkToken });
   });
 

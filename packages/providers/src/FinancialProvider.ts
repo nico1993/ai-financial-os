@@ -94,13 +94,26 @@ export type ProviderWebhookEvent =
 export interface CreateLinkTokenInput {
   /** Plaid's user.client_user_id — opaque, just needs to be stable per user. */
   userId: string;
+  /** ING-14/ADR-0046: how many days of transaction history to request at
+   * Link initialization (Plaid's own `days_requested` unit) -- supersedes
+   * ADR-0002's original fixed-30-day cap now that the user picks it
+   * (1/2/3 months) at connect time. Optional: omitted keeps the
+   * adapter's own default (still 30 days, unchanged). Whatever value
+   * reaches the adapter is clamped there to this app's own product
+   * ceiling regardless of what a caller passes -- see PlaidProvider's
+   * own comment for the exact bounds and why they're narrower than
+   * Plaid's real 1-730 day range. */
+  daysRequested?: number;
 }
 
 export interface FinancialProvider {
   /** Initializes a Link session for the frontend (ADR-0017 — not in the
    * original §2.1 sketch, but AGENTS.md requires every Plaid call to go
-   * through this interface, and Link can't start without one). Bakes in
-   * the 30-day backfill cap (ADR-0002) — callers don't control it. */
+   * through this interface, and Link can't start without one). ADR-0046
+   * (supersedes ADR-0002): the backfill window is caller-chosen via
+   * `input.daysRequested`, clamped server-side to this app's own 30-90
+   * day product ceiling regardless of what's passed in — never Plaid's
+   * own wider 1-730 day range unclamped. */
   createLinkToken(input: CreateLinkTokenInput): Promise<{ linkToken: string }>;
   /** Exchanges a Link `public_token` for a durable connection: creates the
    * access token, resolves the institution name, and fetches the initial

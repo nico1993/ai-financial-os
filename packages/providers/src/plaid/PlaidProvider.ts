@@ -65,6 +65,24 @@ interface PlaidVerificationKey {
  * checked on every verification. */
 const verificationKeyCache = new Map<string, PlaidVerificationKey>();
 
+// ING-14/ADR-0046: this app's own product ceiling for how far back a
+// user can request transaction history at connect time -- 1/2/3 months,
+// 3 months (90 days) as the hard max per the ticket's own wording.
+// Clamped here, the one place a link token is actually built, so no
+// caller (a route bug, a future second frontend) can ever ask Plaid for
+// more than this app has ever offered in its own UI. Well inside Plaid's
+// real `days_requested` range (1-730 days, confirmed against Plaid's
+// current API docs, 2026-09-04) -- a deliberate product choice narrower
+// than the platform limit, not this app straining against it.
+const MIN_DAYS_REQUESTED = 30;
+const MAX_DAYS_REQUESTED = 90;
+const DEFAULT_DAYS_REQUESTED = 30;
+
+function clampDaysRequested(daysRequested: number | undefined): number {
+  if (daysRequested === undefined) return DEFAULT_DAYS_REQUESTED;
+  return Math.min(MAX_DAYS_REQUESTED, Math.max(MIN_DAYS_REQUESTED, Math.round(daysRequested)));
+}
+
 export class PlaidProvider implements FinancialProvider {
   constructor(
     private readonly client: PlaidApi,
@@ -80,9 +98,10 @@ export class PlaidProvider implements FinancialProvider {
         country_codes: this.config.countryCodes ?? [CountryCode.Us],
         language: "en",
         webhook: this.config.webhookUrl,
-        // ADR-0002: cap initial backfill at 30 days, enforced here so no
-        // caller of this interface can request more.
-        transactions: { days_requested: 30 },
+        // ADR-0046 (supersedes ADR-0002's fixed 30): caller-chosen,
+        // clamped to this app's own 30-90 day ceiling above -- never
+        // trusts input.daysRequested unclamped.
+        transactions: { days_requested: clampDaysRequested(input.daysRequested) },
       });
 
       return { linkToken: response.data.link_token };

@@ -73,12 +73,24 @@ export function useTriggerSyncMutation() {
   });
 }
 
+/** ING-14: how far back to backfill (30/60/90 days -- WalletsSection.tsx's
+ * dialog offers exactly these three, `routes/plaid.ts`/`PlaidProvider`
+ * both clamp to this same 30-90 range again regardless). Omitted (or the
+ * whole input omitted) keeps the previous default: 30 days/1 month. */
+export interface CreateLinkTokenInput {
+  daysRequested?: number;
+}
+
 /** Fetches a fresh Plaid Link token on demand -- not auto-run on mount,
  * since a token is only good for one Link session and there's no reason
  * to mint one before the user has actually asked to connect something. */
 export function useCreateLinkTokenMutation() {
   return useMutation({
-    mutationFn: () => apiFetch<{ linkToken: string }>("/api/plaid/link-token", { method: "POST" }),
+    mutationFn: (input?: CreateLinkTokenInput) =>
+      apiFetch<{ linkToken: string }>("/api/plaid/link-token", {
+        method: "POST",
+        body: input ?? {},
+      }),
   });
 }
 
